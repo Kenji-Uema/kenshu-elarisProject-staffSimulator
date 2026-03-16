@@ -1,0 +1,106 @@
+package mq
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"github.com/Kenji-Uema/staffSimulator/internal/config"
+	"github.com/Kenji-Uema/staffSimulator/internal/domain/errors/mqErrors"
+	"github.com/Kenji-Uema/staffSimulator/internal/port"
+	amqp "github.com/rabbitmq/amqp091-go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/protobuf/encoding/protojson"
+
+	"google.golang.org/protobuf/proto"
+)
+
+type rabbitmqProducer struct {
+	*RabbitMqChannel
+	exchangeName  string
+	exchangeKind  string
+	publishConfig config.PublishConfig
+}
+
+func NewRabbitmqProducer(rabbitmqConnection *RabbitMqConnection, publishConfig config.PublishConfig) (port.MqPublisher, error) {
+	paymentProducer := rabbitmqProducer{
+		RabbitMqChannel: NewRabbitMqChannel(rabbitmqConnection),
+		publishConfig:   publishConfig,
+	}
+
+	if err := paymentProducer.openChannel(); err != nil {
+		return nil, err
+	}
+
+	return &paymentProducer, nil
+}
+
+func (p *rabbitmqProducer) DeclareExchange(config config.ExchangeConfig) error {
+	p.exchangeName = config.Name
+	p.exchangeKind = config.Kind
+	if config.Kind == "" {
+		slog.WarnContext(context.Background(), "exchange kind not specified, defaulting to 'direct'")
+		p.exchangeKind = "direct"
+	}
+
+	if p.channel == nil || p.channel.IsClosed() {
+		if err := p.reopenChannel(context.Background()); err != nil {
+			return err
+		}
+	}
+
+	if err := p.channel.ExchangeDeclare(p.exchangeName, p.exchangeKind,
+		config.Durable, config.AutoDelete, config.Internal,
+		config.NoWait, config.Args); err != nil {
+
+		return fmt.Errorf("declare exchange %q: %w", config.Name, err)
+	}
+
+	return nil
+}
+
+func (p *rabbitmqProducer) Publish(ctx context.Context, message proto.Message, routingKey string) error {
+	if p.channel == nil || p.channel.IsClosed() {
+		if err := p.reopenChannel(ctx); err != nil {
+			return err
+		}
+	}
+
+	payload, err := protojson.Marshal(message)
+	if err != nil {
+		slog.ErrorContext(ctx, "failed to marshal message", "error", err)
+		return &mqErrors.UnexpectedErr{Msg: "failed to marshal message", Err: err}
+	}
+
+	headers := amqp.Table{}
+	if sc := trace.SpanContextFromContext(ctx); sc.HasTraceID() {
+		carrier := propagation.MapCarrier{}
+		otel.GetTextMapPropagator().Inject(ctx, carrier)
+		for k, v := range carrier {
+			headers[k] = v
+		}
+	}
+
+	if err := p.channel.PublishWithContext(
+		ctx,
+		p.exchangeName,
+		routingKey,
+		p.publishConfig.Mandatory,
+		p.publishConfig.Immediate,
+		amqp.Publishing{
+			ContentType:  "application/json",
+			Body:         payload,
+			DeliveryMode: amqp.Persistent,
+			Headers:      headers,
+			Timestamp:    time.Now(),
+		},
+	); err != nil {
+		slog.ErrorContext(ctx, "failed to publish message", "error", err)
+		return &mqErrors.UnexpectedErr{Msg: "failed to publish message", Err: err}
+	}
+
+	return nil
+}

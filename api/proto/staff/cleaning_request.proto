@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package staff;
+option go_package = "github.com/Kenji-Uema/staffSimulator/internal/domain/dto;dto";
+
+message CleaningRequest {
+  string roomName = 1;
+  RequestType request = 2;
+}
+
+// Actor that produced the message.
+enum RequestType {
+  // Default zero value.
+  UNSPECIFIED = 0;
+  // Guest-originated message.
+  PREPARE_FOR_GUEST = 1;
+  // System-originated message.
+  DAILY_CLEANING = 2;
+  FULL_CLEANING = 3;
+  PREPARE_FOR_SLEEP = 4;
+}
