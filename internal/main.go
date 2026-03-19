@@ -2,22 +2,24 @@ package main
 
 import (
 	"context"
-	"errors"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/Kenji-Uema/staffSimulator/internal/app"
 	"github.com/Kenji-Uema/staffSimulator/internal/config"
-	"github.com/Kenji-Uema/staffSimulator/internal/domain"
+	"github.com/Kenji-Uema/staffSimulator/internal/infra"
 	grpcclock "github.com/Kenji-Uema/staffSimulator/internal/infra/clock"
 	"github.com/Kenji-Uema/staffSimulator/internal/infra/logging"
-	"github.com/Kenji-Uema/staffSimulator/internal/infra/mdb"
-	"github.com/Kenji-Uema/staffSimulator/internal/infra/mq"
 	"github.com/Kenji-Uema/staffSimulator/internal/infra/telemetry"
 	"github.com/Kenji-Uema/staffSimulator/internal/port"
+	"github.com/Kenji-Uema/staffSimulator/internal/transport"
 )
+
+const shutdownTimeout = 5 * time.Second
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -42,243 +44,71 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	telemetryInitialized := true
-	defer func() {
-		if telemetryInitialized {
-			if shutdownErr := shutdownTelemetry(context.Background()); shutdownErr != nil {
-				slog.Error("failed to shutdown telemetry", "error", shutdownErr)
-			}
-		}
-	}()
 
-	mongoDB, err := initMongoDb(ctx, err, configs)
+	mongoDB, err := infra.NewMongoDb(ctx, err, configs)
 	if err != nil {
 		return err
 	}
-	mongoInitialized := true
-	defer func() {
-		if mongoInitialized {
-			if closeErr := mongoDB.connectionClose(context.Background()); closeErr != nil {
-				slog.Error("failed to close mongo connection", "error", closeErr)
-			}
-		}
-	}()
 
-	rabbitmq, err := initRabbitmq(ctx, err, configs)
+	rabbitmq, err := infra.NewRabbitmq(ctx, err, configs)
 	if err != nil {
 		return err
 	}
-	rabbitInitialized := true
-	defer func() {
-		if rabbitInitialized {
-			closeConsumer(rabbitmq.hourChangeConsumer, "hour change consumer")
-			closeConsumer(rabbitmq.dayChangeConsumer, "day change consumer")
-			closeConsumer(rabbitmq.cleaningConsumer, "cleaning consumer")
-
-			if closeErr := rabbitmq.connectionClose(); closeErr != nil {
-				slog.Error("failed to close rabbitmq connection", "error", closeErr)
-			}
-		}
-	}()
 
 	clockClient, err := grpcclock.NewClockClient(configs.Services)
 	if err != nil {
 		return err
 	}
-	clockInitialized := true
-	defer func() {
-		if clockInitialized {
-			if closeErr := clockClient.Close(); closeErr != nil {
-				slog.Error("failed to close clock client", "error", closeErr)
-			}
-		}
-	}()
 
-	channels := initChannels()
+	httpServer := transport.StartHTTPServer(configs.AppConfig, rabbitmq.Connection, mongoDB.Connection)
 
-	services, err := initServices(configs.AppConfig, mongoDB, rabbitmq, channels, clockClient)
+	services, err := app.NewServices(configs.AppConfig, mongoDB, rabbitmq, clockClient)
 	if err != nil {
 		return err
 	}
-
-	go services.housekeeperService.Work(ctx, channels.cleaning)
-	go services.laundererService.Work(ctx, channels.launderer)
-	go services.stockerService.Work(ctx, channels.stocker)
-	services.managerService.Start(ctx)
+	services.Start(ctx)
 
 	<-ctx.Done()
 	slog.InfoContext(ctx, "shutdown signal received")
 
-	clockInitialized = false
-	rabbitInitialized = false
-	mongoInitialized = false
-	telemetryInitialized = false
-	shutdown(shutdownTelemetry, mongoDB, rabbitmq, clockClient)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+
+	shutdown(shutdownCtx, shutdownTelemetry, mongoDB, rabbitmq, clockClient, httpServer)
 
 	return nil
 }
 
-func shutdown(shutdownTelemetry func(context.Context) error, mongoDB mongo, rabbitmq rabbitmq, clockClient port.Clock) {
-	if err := shutdownTelemetry(context.Background()); err != nil {
-		slog.Error("failed to shutdown telemetry", "error", err)
+func shutdown(ctx context.Context, shutdownTelemetry func(context.Context) error, mongoDB infra.Mongo, rabbitmq infra.Rabbitmq, clockClient port.Clock, httpServer *http.Server) {
+	if err := shutdownTelemetry(ctx); err != nil {
+		slog.ErrorContext(ctx, "failed to shutdown telemetry", "error", err)
 	}
 
-	if err := mongoDB.connectionClose(context.Background()); err != nil {
-		slog.Error("failed to close mongo connection", "error", err)
+	if err := mongoDB.ConnectionClose(ctx); err != nil {
+		slog.ErrorContext(ctx, "failed to close mongo connection", "error", err)
 	}
 
-	closeConsumer(rabbitmq.hourChangeConsumer, "hour change consumer")
-	closeConsumer(rabbitmq.dayChangeConsumer, "day change consumer")
-	closeConsumer(rabbitmq.cleaningConsumer, "cleaning consumer")
+	if err := rabbitmq.HourChangeConsumer.CloseChannel(); err != nil {
+		slog.ErrorContext(ctx, "failed to close hour change consumer channel", "error", err)
+	}
 
-	if err := rabbitmq.connectionClose(); err != nil {
-		slog.Error("failed to close rabbitmq connection", "error", err)
+	if err := rabbitmq.DayChangeConsumer.CloseChannel(); err != nil {
+		slog.ErrorContext(ctx, "failed to close day change consumer channel", "error", err)
+	}
+
+	if err := rabbitmq.CleaningConsumer.CloseChannel(); err != nil {
+		slog.ErrorContext(ctx, "failed to close cleaning consumer channel", "error", err)
+	}
+
+	if err := rabbitmq.ConnectionClose(); err != nil {
+		slog.ErrorContext(ctx, "failed to close rabbitmq connection", "error", err)
 	}
 
 	if err := clockClient.Close(); err != nil {
-		slog.Error("failed to close clock client", "error", err)
-	}
-}
-
-type channels struct {
-	cleaning  chan domain.CleaningRequest
-	launderer chan domain.WashRequest
-	stocker   chan domain.RestockRequest
-}
-
-func initChannels() channels {
-	return channels{
-		cleaning:  make(chan domain.CleaningRequest, 32),
-		launderer: make(chan domain.WashRequest, 32),
-		stocker:   make(chan domain.RestockRequest, 16),
-	}
-}
-
-type services struct {
-	housekeeperService *app.HousekeeperService
-	laundererService   *app.LaundererService
-	stockerService     *app.StockerService
-	managerService     *app.ManagerService
-}
-
-func initServices(configs config.AppConfig, mongo mongo, rabbitmq rabbitmq, channels channels, clock port.Clock) (services, error) {
-	stockerService, err := app.NewStockerService(configs.Employees.Stockers, mongo.stockRepo)
-	if err != nil {
-		return services{}, err
+		slog.ErrorContext(ctx, "failed to close clock client", "error", err)
 	}
 
-	housekeeperService, err := app.NewHousekeeperService(
-		configs.Employees.Housekeepers,
-		clock,
-		mongo.cottageRepo,
-		mongo.stockRepo,
-		stockerService,
-		channels.launderer,
-	)
-	if err != nil {
-		return services{}, err
-	}
-
-	laundererService, err := app.NewLaundererService(
-		configs.Employees.Launderers,
-		clock,
-		rabbitmq.hourChangeConsumer,
-		mongo.stockRepo,
-		stockerService,
-	)
-	if err != nil {
-		return services{}, err
-	}
-
-	managerService, err := app.NewManagerService(rabbitmq.cleaningConsumer, rabbitmq.dayChangeConsumer, channels.cleaning, channels.stocker)
-	if err != nil {
-		return services{}, err
-	}
-	return services{
-		housekeeperService: housekeeperService,
-		laundererService:   laundererService,
-		stockerService:     stockerService,
-		managerService:     managerService,
-	}, nil
-}
-
-type rabbitmq struct {
-	cleaningConsumer   port.MqConsumer
-	dayChangeConsumer  port.MqConsumer
-	hourChangeConsumer port.MqConsumer
-	connectionClose    func() error
-}
-
-func initRabbitmq(ctx context.Context, err error, configs config.Configs) (rabbitmq, error) {
-	rabbitConn, err := mq.NewRabbitMqConnection(ctx, configs.RabbitMqConfig)
-	if err != nil {
-		return rabbitmq{}, err
-	}
-
-	cleaningConsumer, err := mq.NewRabbitmqConsumer(rabbitConn, configs.RabbitMqConfig.Consumers.Cleaning.Consume)
-	if err != nil {
-		return rabbitmq{}, err
-	}
-
-	dayChangeConsumer, err := mq.NewRabbitmqConsumer(rabbitConn, configs.RabbitMqConfig.Consumers.DayChange.Consume)
-	if err != nil {
-		return rabbitmq{}, err
-	}
-
-	hourChangeConsumer, err := mq.NewRabbitmqConsumer(rabbitConn, configs.RabbitMqConfig.Consumers.HourChange.Consume)
-	if err != nil {
-		return rabbitmq{}, err
-	}
-
-	if err := cleaningConsumer.DeclareQueue(ctx, configs.RabbitMqConfig.Consumers.Cleaning.Queue); err != nil {
-		return rabbitmq{}, err
-	}
-	if err := cleaningConsumer.BindQueue(ctx, configs.RabbitMqConfig.Consumers.Cleaning.Binding); err != nil {
-		return rabbitmq{}, err
-	}
-	if err := dayChangeConsumer.DeclareQueue(ctx, configs.RabbitMqConfig.Consumers.DayChange.Queue); err != nil {
-		return rabbitmq{}, err
-	}
-	if err := dayChangeConsumer.BindQueue(ctx, configs.RabbitMqConfig.Consumers.DayChange.Binding); err != nil {
-		return rabbitmq{}, err
-	}
-	if err := hourChangeConsumer.DeclareQueue(ctx, configs.RabbitMqConfig.Consumers.HourChange.Queue); err != nil {
-		return rabbitmq{}, err
-	}
-	if err := hourChangeConsumer.BindQueue(ctx, configs.RabbitMqConfig.Consumers.HourChange.Binding); err != nil {
-		return rabbitmq{}, err
-	}
-	return rabbitmq{
-		cleaningConsumer:   cleaningConsumer,
-		dayChangeConsumer:  dayChangeConsumer,
-		hourChangeConsumer: hourChangeConsumer,
-		connectionClose:    rabbitConn.Close,
-	}, nil
-}
-
-type mongo struct {
-	stockRepo       port.StockRepo
-	cottageRepo     port.CottageRepo
-	connectionClose func(context.Context) error
-}
-
-func initMongoDb(ctx context.Context, err error, configs config.Configs) (mongo, error) {
-	mongoDB, err := mdb.NewMongoDb(ctx, configs.MongoConfig)
-	if err != nil {
-		return mongo{}, err
-	}
-
-	stockRepo := mdb.NewStockRepo(mongoDB.Database)
-	cottageRepo := mdb.NewCottageRepo(mongoDB.Database)
-	return mongo{
-		stockRepo:       stockRepo,
-		cottageRepo:     cottageRepo,
-		connectionClose: mongoDB.Close,
-	}, nil
-}
-
-func closeConsumer(consumer interface{ CloseChannel() error }, name string) {
-	if err := consumer.CloseChannel(); err != nil && !errors.Is(err, os.ErrClosed) {
-		slog.Error("failed to close consumer channel", "consumer", name, "error", err)
+	if err := httpServer.Shutdown(ctx); err != nil {
+		slog.ErrorContext(ctx, "failed to close http server", "error", err)
 	}
 }
