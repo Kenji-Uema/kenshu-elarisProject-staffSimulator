@@ -1,11 +1,25 @@
 package dbErrors
 
 import (
-	"errors"
 	"fmt"
-
-	"go.mongodb.org/mongo-driver/v2/bson"
 )
+
+type UnexpectedErr struct {
+	Msg string
+	Err error
+}
+
+func (e *UnexpectedErr) Error() string {
+	return fmt.Sprintf("unexpected error, %s: %v", e.Msg, e.Err)
+}
+
+type CorruptedDataErr struct {
+	Err error
+}
+
+func (e CorruptedDataErr) Error() string {
+	return fmt.Sprintf("database contains inconsistent cottage data: %v", e.Err)
+}
 
 type ErrCottageDoesNotExist struct {
 	CottageName string
@@ -15,22 +29,34 @@ func (e *ErrCottageDoesNotExist) Error() string {
 	return fmt.Sprintf("Cottage with name %s does not exist", e.CottageName)
 }
 
-type ErrGuestDoesNotExist struct {
-	Id         bson.ObjectID
-	DocumentId string
+type ErrStockDoesNotExist struct {
 }
 
-func (e *ErrGuestDoesNotExist) Error() string {
-	return fmt.Sprintf("Guest with document id %s does not exist", e.Id.Hex())
+func (e *ErrStockDoesNotExist) Error() string {
+	return fmt.Sprintf("Could not find stock collection")
 }
 
-// ErrBookingRepo indicates an unexpected internal failure in the Booking repository.
-var ErrBookingRepo = errors.New("bookingRepository failure")
+type StockInsufficientQuantityErr struct {
+	ItemName string
+	Quantity int
+}
 
-// ErrCottageRepo indicates an unexpected internal failure in the Cottage repository.
-var ErrCottageRepo = errors.New("cottageRepository failure")
+func (e *StockInsufficientQuantityErr) Error() string {
+	return fmt.Sprintf("Stock for item %s is insufficient, %d requested", e.ItemName, e.Quantity)
+}
 
-var ErrGuestRepo = errors.New("guestRepository failure")
+type CottageCleaningStatusNotUpdatedErr struct {
+	CottageName string
+}
 
-// ErrStockRepo indicates an unexpected internal failure in the Stock repository.
-var ErrStockRepo = errors.New("stockRepository failure")
+func (e *CottageCleaningStatusNotUpdatedErr) Error() string {
+	return fmt.Sprintf("could not update cleaningStatus for cottage %s", e.CottageName)
+}
+
+type StockItemQuantityNotUpdatedErr struct {
+	ItemName string
+}
+
+func (e *StockItemQuantityNotUpdatedErr) Error() string {
+	return fmt.Sprintf("could not update quantity for item %s", e.ItemName)
+}

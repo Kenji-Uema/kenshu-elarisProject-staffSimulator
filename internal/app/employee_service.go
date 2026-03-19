@@ -14,21 +14,18 @@ type employeeStatus[R domain.Request] struct {
 	handledRequests int
 }
 
-type EmployeeMetrics[R domain.Request] struct {
-	IsIdle          bool
-	CurrentRequest  R
-	HandledRequests int
-}
-
-type EmployeeService[R domain.Request] struct {
+type employeeService[R domain.Request] struct {
 	employeeCount int
 	employees     map[string]*employeeStatus[R]
 	employeeMu    sync.RWMutex
 	work          func(ctx context.Context, employeeName string, request R)
+	workFn        func(ctx context.Context, employeeName string, request R)
 }
 
-func (s *EmployeeService[R]) Run(ctx context.Context, requests <-chan R) {
+func (s *employeeService[R]) Work(ctx context.Context, requests <-chan R) {
 	var wg sync.WaitGroup
+
+	slog.InfoContext(ctx, "employee service started", "employeeCount", s.employeeCount)
 
 	for name := range s.employees {
 		wg.Add(1)
@@ -36,44 +33,62 @@ func (s *EmployeeService[R]) Run(ctx context.Context, requests <-chan R) {
 		go func(employeeName string) {
 			defer wg.Done()
 
+			slog.DebugContext(ctx, "employee worker started", "employeeName", employeeName)
+
 			for {
 				select {
 				case <-ctx.Done():
-					slog.Info("employee shutting down", "employeeName", employeeName)
+					slog.InfoContext(ctx, "employee worker stopping", "employeeName", employeeName, "reason", "context canceled")
 					return
 				case request, ok := <-requests:
 					if !ok {
+						slog.InfoContext(ctx, "employee worker stopping", "employeeName", employeeName, "reason", "request channel closed")
 						return
 					}
 
-					s.setEmployeeStatus(employeeName, false, request, true)
+					handledRequests := s.setEmployeeWorkingStatus(employeeName, request)
+					slog.InfoContext(ctx,
+						"employee started request",
+						"employeeName", employeeName,
+						"handledRequests", handledRequests,
+						"request", request,
+					)
 
-					s.handleWork(ctx, employeeName, request)
+					s.work(ctx, employeeName, request)
 
-					var zero R
-					s.setEmployeeStatus(employeeName, true, zero, false)
+					s.setEmployeeIdleStatus(employeeName)
+					slog.InfoContext(ctx,
+						"employee finished request",
+						"employeeName", employeeName,
+						"handledRequests", handledRequests,
+						"request", request,
+					)
 				}
 			}
 		}(name)
 	}
 
 	wg.Wait()
+	slog.InfoContext(ctx, "employee service stopped", "employeeCount", s.employeeCount)
 }
 
-func (s *EmployeeService[R]) handleWork(ctx context.Context, employeeName string, request R) {
-	if s.work != nil {
-		s.work(ctx, employeeName, request)
-		return
+func (s *employeeService[R]) setEmployeeWorkingStatus(employeeName string, request R) int {
+	s.employeeMu.Lock()
+	defer s.employeeMu.Unlock()
+
+	status, ok := s.employees[employeeName]
+	if !ok {
+		return 0
 	}
 
-	slog.Info(
-		"cleaning request received",
-		"workerName", employeeName,
-		"request", request,
-	)
+	status.isIdle = false
+	status.handledRequests++
+	status.currentRequest = request
+
+	return status.handledRequests
 }
 
-func (s *EmployeeService[R]) setEmployeeStatus(employeeName string, isIdle bool, request R, incrementHandledRequests bool) {
+func (s *employeeService[R]) setEmployeeIdleStatus(employeeName string) {
 	s.employeeMu.Lock()
 	defer s.employeeMu.Unlock()
 
@@ -82,39 +97,7 @@ func (s *EmployeeService[R]) setEmployeeStatus(employeeName string, isIdle bool,
 		return
 	}
 
-	status.isIdle = isIdle
-	status.currentRequest = request
-	if incrementHandledRequests {
-		status.handledRequests++
-	}
-}
-
-func (s *EmployeeService[R]) IdleEmployeeCount() int {
-	s.employeeMu.Lock()
-	defer s.employeeMu.Unlock()
-
-	idleEmployees := 0
-	for _, status := range s.employees {
-		if status.isIdle {
-			idleEmployees++
-		}
-	}
-
-	return idleEmployees
-}
-
-func (s *EmployeeService[R]) EmployeeMetrics() map[string]EmployeeMetrics[R] {
-	s.employeeMu.Lock()
-	defer s.employeeMu.Unlock()
-
-	metrics := make(map[string]EmployeeMetrics[R], len(s.employees))
-	for workerName, status := range s.employees {
-		metrics[workerName] = EmployeeMetrics[R]{
-			IsIdle:          status.isIdle,
-			CurrentRequest:  status.currentRequest,
-			HandledRequests: status.handledRequests,
-		}
-	}
-
-	return metrics
+	var emptyRequest R
+	status.isIdle = true
+	status.currentRequest = emptyRequest
 }

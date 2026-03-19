@@ -1,0 +1,53 @@
+[
+  {
+    "Id": "86a7d3bb21169a393dd1db1b",
+    "Name": "A",
+    "View": "Lake",
+    "Cleaned": false,
+    "Details": {
+      "Description": "Lakefront cottage",
+      "View": "Lake",
+      "FurnitureDescription": "Modern wood furniture",
+      "BathroomDescription": "Stone bathroom",
+      "AmenitiesDescription": "Fireplace and minibar"
+    },
+    "Photos": ["a-1.jpg", "a-2.jpg"],
+    "PricePerNight": 220,
+    "Bookings": ["b5fa4aefa370638801dbe2af"],
+    "CleaningStatus": "DIRTY"
+  },
+  {
+    "Id": "86a7d3bb21169a393dd1db1c",
+    "Name": "B",
+    "View": "Garden",
+    "Cleaned": true,
+    "Details": {
+      "Description": "Garden cottage",
+      "View": "Garden",
+      "FurnitureDescription": "Classic decor",
+      "BathroomDescription": "Compact bathroom",
+      "AmenitiesDescription": "Tea station"
+    },
+    "Photos": ["b-1.jpg"],
+    "PricePerNight": 180,
+    "Bookings": [],
+    "CleaningStatus": "DAILY_CLEANED"
+  },
+  {
+    "Id": "86a7d3bb21169a393dd1db1d",
+    "Name": "C",
+    "View": "Forest",
+    "Cleaned": false,
+    "Details": {
+      "Description": "Forest retreat",
+      "View": "Forest",
+      "FurnitureDescription": "Rustic cabin style",
+      "BathroomDescription": "Large shower",
+      "AmenitiesDescription": "Hammock and fire pit"
+    },
+    "Photos": ["c-1.jpg"],
+    "PricePerNight": 195,
+    "Bookings": ["40583ce2a1791c22e68e957c"],
+    "CleaningStatus": "PREPARED_FOR_SLEEP"
+  }
+]

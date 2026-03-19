@@ -5,14 +5,13 @@ type Request interface {
 }
 
 type CleaningRequest struct {
-	RoomName string
-	R        string
+	RoomName    string
+	RequestType string
 }
 
 type WashRequest struct {
 	RoomName string
-	Linens   bool
-	Towels   bool
+	Item     string
 }
 
 type RestockRequest struct {

@@ -7,34 +7,49 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/Kenji-Uema/staffSimulator/internal/app/validation"
 	"github.com/Kenji-Uema/staffSimulator/internal/domain"
-	"github.com/Kenji-Uema/staffSimulator/internal/domain/dto"
+	"github.com/Kenji-Uema/staffSimulator/internal/domain/errors/dbErrors"
 	"github.com/Kenji-Uema/staffSimulator/internal/port"
-	"github.com/Kenji-Uema/staffSimulator/internal/transport/grpc/clock"
-	"google.golang.org/protobuf/proto"
 )
 
-const linensCycleDurationInHours = 2
-const towelsCycleDurationInHours = 1
-const soapUsedToWashLinens = 20
-const soapUsedToWashTowels = 10
-
-type LaundererService struct {
-	EmployeeService[domain.WashRequest]
+type washConfig struct {
+	soap                 int
+	cycleDurationInHours float64
 }
 
-type Launderer struct {
-	clock            clock.Clock
+var washTable = map[string]washConfig{
+	"linens": {
+		soap:                 20,
+		cycleDurationInHours: 2,
+	},
+	"towels": {
+		soap:                 10,
+		cycleDurationInHours: 1,
+	},
+}
+
+type LaundererService struct {
+	employeeService[domain.WashRequest]
+}
+
+type launderer struct {
+	clock            port.Clock
 	hourChangeClient port.MqConsumer
 	stockRepo        port.StockRepo
+	stocker          immediateRestocker
 }
 
 func NewLaundererService(employeeNames []string,
-	clock clock.Clock, hourChangeClient port.MqConsumer, stockRepo port.StockRepo) (*LaundererService, error) {
+	clock port.Clock, hourChangeClient port.MqConsumer, stockRepo port.StockRepo, stocker immediateRestocker) (*LaundererService, error) {
 
 	employeeCount := len(employeeNames)
-	if employeeCount == 0 {
-		return nil, fmt.Errorf("worker count must be greater than 0")
+	if err := validation.New().
+		NotZeroValue("clock", clock).
+		NotZeroValue("hourChangeClient", hourChangeClient).
+		NotZeroValue("stockRepo", stockRepo).
+		PositiveValue("employeeCount", employeeCount).Validate(); err != nil {
+		return nil, err
 	}
 
 	employees := make(map[string]*employeeStatus[domain.WashRequest], employeeCount)
@@ -42,14 +57,15 @@ func NewLaundererService(employeeNames []string,
 		employees[workerName] = &employeeStatus[domain.WashRequest]{isIdle: true}
 	}
 
-	launderer := &Launderer{
+	launderer := &launderer{
 		clock:            clock,
 		hourChangeClient: hourChangeClient,
 		stockRepo:        stockRepo,
+		stocker:          stocker,
 	}
 
 	return &LaundererService{
-		EmployeeService: EmployeeService[domain.WashRequest]{
+		employeeService: employeeService[domain.WashRequest]{
 			employeeCount: employeeCount,
 			employees:     employees,
 			work:          launderer.work,
@@ -57,83 +73,78 @@ func NewLaundererService(employeeNames []string,
 	}, nil
 }
 
-func (l *Launderer) work(ctx context.Context, employeeName string, request domain.WashRequest) {
+func (l *launderer) work(ctx context.Context, employeeName string, request domain.WashRequest) {
 	startTime, err := l.clock.Now(ctx)
 	if err != nil {
 		slog.ErrorContext(ctx, "failed to get current time", "error", err)
 		return
 	}
 
-	type washTask struct {
-		item         string
-		duration     float64
-		soapQuantity int
+	slog.InfoContext(ctx,
+		"launderer started to workFn on washing request",
+		"employeeName", employeeName,
+		"roomName", request.RoomName,
+		"item", request.Item,
+		"startTime", startTime,
+	)
+
+	err = l.wash(ctx, request.Item, employeeName, request.RoomName, startTime)
+	if err == nil {
+		return
 	}
 
-	var tasks []washTask
-	if request.Linens {
-		tasks = append(tasks, washTask{item: "linens", duration: linensCycleDurationInHours, soapQuantity: soapUsedToWashLinens})
-	}
-	if request.Towels {
-		tasks = append(tasks, washTask{item: "towels", duration: towelsCycleDurationInHours, soapQuantity: soapUsedToWashTowels})
+	var stockErr *dbErrors.StockInsufficientQuantityErr
+	if !errors.As(err, &stockErr) {
+		slog.ErrorContext(ctx, "failed to wash item", "item", request.Item, "employeeName", employeeName, "roomName", request.RoomName, "error", err)
+		return
 	}
 
-	for _, task := range tasks {
-		if err := l.wash(ctx, task.duration, task.soapQuantity, employeeName, request.RoomName, task.item, startTime); err != nil {
-			slog.ErrorContext(ctx, "failed to wash item", "item", task.item, "error", err)
+	slog.WarnContext(ctx,
+		"insufficient stock to wash item, requesting restock",
+		"employeeName", employeeName,
+		"roomName", request.RoomName,
+		"itemName", stockErr.ItemName,
+		"requestedQuantity", stockErr.Quantity,
+	)
+
+	if restockErr := l.stocker.ImmediateRestock(ctx, request.Item); restockErr != nil {
+		slog.ErrorContext(ctx, "failed to restock item", "employeeName", employeeName, "roomName", request.RoomName, "error", restockErr)
+		return
+	}
+
+	if err := l.wash(ctx, request.Item, employeeName, request.RoomName, startTime); err != nil {
+		slog.ErrorContext(ctx, "failed to wash item after restock", "employeeName", employeeName, "roomName", request.RoomName, "error", err)
+	}
+}
+
+func (l *launderer) wash(ctx context.Context, item string, employeeName string, roomName string, startTime *time.Time) error {
+	washConfig, ok := washTable[item]
+	if !ok {
+		return fmt.Errorf("unsupported wash item: %s", item)
+	}
+
+	err := l.stockRepo.ConsumeItem(ctx, item, washConfig.soap)
+	if err == nil {
+		finishTime, err := l.washingCycle(ctx, *startTime, washConfig.cycleDurationInHours)
+		if err != nil {
+			return err
 		}
+
+		slog.InfoContext(ctx, "launderer is done",
+			"employeeName", employeeName,
+			"roomName", roomName,
+			"washing", item,
+			"startTime", startTime,
+			"finishTime", finishTime,
+		)
+
+		return nil
 	}
+
+	return err
 }
 
-func (l *Launderer) wash(ctx context.Context, cycleDurationInHours float64, soapQuantity int,
-	employeeName string, roomName string, item string, startTime *time.Time) error {
-
-	slog.InfoContext(ctx, "launderer is working",
-		"employeeName", employeeName,
-		"roomName", roomName,
-		"washing", item,
-		"startTime", startTime,
-	)
-
-	if err := l.stockRepo.ConsumeItem(ctx, item, soapQuantity); err != nil {
-		return err
-	}
-
-	finishTime, err := l.washingCycle(ctx, *startTime, cycleDurationInHours)
-	if err != nil {
-		slog.ErrorContext(ctx, "failed to wash", "error", err)
-		return err
-	}
-
-	slog.InfoContext(ctx, "launderer is done",
-		"employeeName", employeeName,
-		"roomName", roomName,
-		"washing", item,
-		"startTime", startTime,
-		"finishTime", finishTime,
-	)
-
-	return nil
-}
-
-func (l *Launderer) unmarshalTimeEvent(ctx context.Context, body []byte) (time.Time, error) {
-	var timeEvent dto.TimeEvent
-	if err := proto.Unmarshal(body, &timeEvent); err != nil {
-		slog.WarnContext(ctx, "invalid day.changed payload", "error", err)
-		return time.Time{}, err
-
-	}
-
-	if timeEvent.GetTime() == nil {
-		slog.WarnContext(ctx, "invalid day.changed payload: missing time")
-		return time.Time{}, errors.New("missing time")
-	}
-
-	tomorrow := timeEvent.GetTime().AsTime().AddDate(0, 0, 1)
-	return tomorrow, nil
-}
-
-func (l *Launderer) washingCycle(ctx context.Context, startTime time.Time, cycleDurationInHours float64) (finishTime time.Time, err error) {
+func (l *launderer) washingCycle(ctx context.Context, startTime time.Time, cycleDurationInHours float64) (finishTime time.Time, err error) {
 	deliveries, err := l.hourChangeClient.Consume(ctx)
 	if err != nil {
 		return time.Time{}, err
@@ -148,13 +159,13 @@ func (l *Launderer) washingCycle(ctx context.Context, startTime time.Time, cycle
 				return time.Time{}, errors.New("delivery channel closed")
 			}
 
-			currentTime, err := l.unmarshalTimeEvent(ctx, delivery.Body)
+			currentTime, err := unmarshalTimeEvent(ctx, delivery.Body)
 			if err != nil {
-				slog.ErrorContext(ctx, "failed to unmarshal day-change event", "error", err)
+				slog.ErrorContext(ctx, "failed to unmarshalCleaningRequest hour-change event", "error", err)
 				return time.Time{}, err
 			}
 
-			if currentTime.Sub(startTime).Hours() > cycleDurationInHours {
+			if currentTime.Sub(startTime).Hours() >= cycleDurationInHours {
 				return currentTime, nil
 			}
 		}

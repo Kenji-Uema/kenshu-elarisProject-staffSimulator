@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/Kenji-Uema/staffSimulator/internal/config"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -35,9 +36,10 @@ func (h *TraceHandler) WithGroup(name string) slog.Handler {
 	return &TraceHandler{base: h.base.WithGroup(name)}
 }
 
-func NewLogger() *slog.Logger {
+func NewLogger(appConfig config.AppConfig) *slog.Logger {
 	base := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
+		Level:     slog.Level(appConfig.Log.Level),
+		AddSource: true,
 	})
 
 	traceHandler := &TraceHandler{base: base}

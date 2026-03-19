@@ -3,28 +3,39 @@ package app
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 
+	"github.com/Kenji-Uema/staffSimulator/internal/app/validation"
 	"github.com/Kenji-Uema/staffSimulator/internal/domain"
+	"github.com/Kenji-Uema/staffSimulator/internal/domain/errors/dbErrors"
 	"github.com/Kenji-Uema/staffSimulator/internal/port"
-	"github.com/Kenji-Uema/staffSimulator/internal/transport/grpc/clock"
 )
 
 type HousekeeperService struct {
-	EmployeeService[domain.CleaningRequest]
+	employeeService[domain.CleaningRequest]
 }
 
-type Housekeeper struct {
-	clock                clock.Clock
+type immediateRestocker interface {
+	ImmediateRestock(ctx context.Context, item string) error
+}
+
+type housekeeper struct {
+	clock                port.Clock
+	cottageRepo          port.CottageRepo
 	stockRepo            port.StockRepo
+	stoker               immediateRestocker
 	laundererRequestChan chan<- domain.WashRequest
 }
 
-func NewHousekeeperService(employeeNames []string, clock clock.Clock, stockRepo port.StockRepo, launderRequestCh chan<- domain.WashRequest) (*HousekeeperService, error) {
+func NewHousekeeperService(employeeNames []string, clock port.Clock, cottageRepo port.CottageRepo,
+	stockRepo port.StockRepo, stocker immediateRestocker, launderRequestCh chan<- domain.WashRequest) (*HousekeeperService, error) {
 	employeeCount := len(employeeNames)
-	if employeeCount == 0 {
-		return nil, fmt.Errorf("worker count must be greater than 0")
+
+	if err := validation.New().
+		NotZeroValue("cottageRepo", cottageRepo).
+		NotZeroValue("stockRepo", stockRepo).
+		PositiveValue("employeeCount", employeeCount).Validate(); err != nil {
+		return nil, err
 	}
 
 	employees := make(map[string]*employeeStatus[domain.CleaningRequest], employeeCount)
@@ -32,14 +43,16 @@ func NewHousekeeperService(employeeNames []string, clock clock.Clock, stockRepo 
 		employees[workerName] = &employeeStatus[domain.CleaningRequest]{isIdle: true}
 	}
 
-	housekeeper := &Housekeeper{
+	housekeeper := &housekeeper{
 		clock:                clock,
+		cottageRepo:          cottageRepo,
 		stockRepo:            stockRepo,
+		stoker:               stocker,
 		laundererRequestChan: launderRequestCh,
 	}
 
 	return &HousekeeperService{
-		EmployeeService: EmployeeService[domain.CleaningRequest]{
+		employeeService: employeeService[domain.CleaningRequest]{
 			employeeCount: employeeCount,
 			employees:     employees,
 			work:          housekeeper.work,
@@ -47,7 +60,7 @@ func NewHousekeeperService(employeeNames []string, clock clock.Clock, stockRepo 
 	}, nil
 }
 
-func (h *Housekeeper) work(ctx context.Context, employeeName string, request domain.CleaningRequest) {
+func (h *housekeeper) work(ctx context.Context, employeeName string, request domain.CleaningRequest) {
 	startTime, err := h.clock.Now(ctx)
 	if err != nil {
 		slog.ErrorContext(ctx, "failed to get current time", "error", err)
@@ -55,24 +68,41 @@ func (h *Housekeeper) work(ctx context.Context, employeeName string, request dom
 	}
 
 	slog.InfoContext(ctx,
-		"housekeeper started to work on cleaning request",
+		"housekeeper started to workFn on cleaning request",
 		"employeeName", employeeName,
 		"roomName", request.RoomName,
-		"request", request.R,
+		"request", request.RequestType,
 		"startTime", startTime,
 	)
 
-	switch request.R {
+	switch request.RequestType {
 	case "PREPARE_FOR_GUEST":
-		h.prepareForGuest(ctx, employeeName, request.RoomName)
+		h.actionConsumeItemRetry(ctx, "added wine bottle", "wine", 1, employeeName, request.RoomName)
+		h.action(ctx, "added a vase of flower", employeeName, request.RoomName)
+		h.action(ctx, "added a welcoming message", employeeName, request.RoomName)
+		h.actionConsumeItemRetry(ctx, "added aroma candle", "aromaCandle", 1, employeeName, request.RoomName)
+		h.updateCleaningStatus(ctx, employeeName, request.RoomName, "PREPARED_FOR_GUEST")
 	case "DAILY_CLEANING":
-		h.dailyCleaning(ctx, employeeName, request.RoomName)
+		h.action(ctx, "trash taken out", employeeName, request.RoomName)
+		h.action(ctx, "bed arranged", employeeName, request.RoomName)
+		h.actionConsumeItemRetry(ctx, "bathroom cleaned", "cleaningItem", 5, employeeName, request.RoomName)
+		h.actionLaundry(ctx, "towels changed", "towels", employeeName, request.RoomName)
+		h.action(ctx, "vacuum cleaned", employeeName, request.RoomName)
+		h.updateCleaningStatus(ctx, employeeName, request.RoomName, "DAILY_CLEANED")
 	case "FULL_CLEANING":
-		h.fullCleaning(ctx, employeeName, request.RoomName)
+		h.action(ctx, "trash taken out", employeeName, request.RoomName)
+		h.actionLaundry(ctx, "towels changed", "towels", employeeName, request.RoomName)
+		h.actionLaundry(ctx, "linens changed", "linens", employeeName, request.RoomName)
+		h.actionConsumeItemRetry(ctx, "bathroom cleaned", "cleaningItem", 10, employeeName, request.RoomName)
+		h.action(ctx, "bedroom detailed cleaned", employeeName, request.RoomName)
+		h.updateCleaningStatus(ctx, employeeName, request.RoomName, "FULLY_CLEANED")
 	case "PREPARE_FOR_SLEEP":
-		h.prepareForSleep(ctx, employeeName, request.RoomName)
+		h.action(ctx, "bed arranged for sleep", employeeName, request.RoomName)
+		h.actionConsumeItemRetry(ctx, "added calm tea bags", "teaBags", 1, employeeName, request.RoomName)
+		h.actionConsumeItemRetry(ctx, "added aroma candle", "aromaCandle", 1, employeeName, request.RoomName)
+		h.updateCleaningStatus(ctx, employeeName, request.RoomName, "PREPARED_FOR_SLEEP")
 	default:
-		slog.ErrorContext(ctx, "unknown cleaning request", "request", request.R)
+		slog.ErrorContext(ctx, "unknown cleaning request", "request", request.RequestType)
 	}
 
 	finishTime, err := h.clock.Now(ctx)
@@ -82,78 +112,16 @@ func (h *Housekeeper) work(ctx context.Context, employeeName string, request dom
 	}
 
 	slog.InfoContext(ctx,
-		"housekeeper finished to work on cleaning request",
+		"housekeeper finished to workFn on cleaning request",
 		"employeeName", employeeName,
 		"roomName", request.RoomName,
-		"request", request.R,
+		"request", request.RequestType,
 		"startTime", startTime,
 		"finishTime", finishTime,
 	)
 }
 
-func (h *Housekeeper) prepareForGuest(ctx context.Context, employeeName string, roomName string) {
-	if err := h.actionConsumeItem(ctx, "added wine bottle", "wine", 1, employeeName, roomName); err != nil {
-		slog.ErrorContext(ctx, "failed to add wine bottle", "error", err)
-	}
-
-	h.action(ctx, "added a vase of flower", employeeName, roomName)
-
-	h.action(ctx, "added a welcoming message", employeeName, roomName)
-
-	if err := h.actionConsumeItem(ctx, "added aroma candle", "aromaCandle", 1, employeeName, roomName); err != nil {
-		slog.ErrorContext(ctx, "failed to add aroma candle", "error", err)
-	}
-}
-
-func (h *Housekeeper) dailyCleaning(ctx context.Context, employeeName string, roomName string) {
-	h.action(ctx, "trash taken out", employeeName, roomName)
-
-	h.action(ctx, "bed arranged", employeeName, roomName)
-
-	if err := h.actionConsumeItem(ctx, "bathroom cleaned", "cleaningItem", 5, employeeName, roomName); err != nil {
-		slog.ErrorContext(ctx, "failed to clean bathroom", "error", err)
-	}
-
-	h.actionLaundry(ctx, "towels changed", "towels", employeeName, roomName)
-
-	if err := h.actionRestockAmenities(ctx, employeeName, roomName); err != nil {
-		slog.ErrorContext(ctx, "failed to restock amenities", "error", err)
-	}
-
-	h.action(ctx, "vacuum cleaned", employeeName, roomName)
-}
-
-func (h *Housekeeper) fullCleaning(ctx context.Context, employeeName string, roomName string) {
-	h.action(ctx, "trash taken out", employeeName, roomName)
-
-	h.actionLaundry(ctx, "towels changed", "towels", employeeName, roomName)
-
-	h.actionLaundry(ctx, "linens changed", "linens", employeeName, roomName)
-
-	if err := h.actionConsumeItem(ctx, "bathroom cleaned", "cleaningItem", 10, employeeName, roomName); err != nil {
-		slog.ErrorContext(ctx, "failed to clean bathroom", "error", err)
-	}
-
-	h.action(ctx, "bedroom detailed cleaned", employeeName, roomName)
-
-	if err := h.actionRestockAmenities(ctx, employeeName, roomName); err != nil {
-		slog.ErrorContext(ctx, "failed to restock amenities", "error", err)
-	}
-}
-
-func (h *Housekeeper) prepareForSleep(ctx context.Context, employeeName string, roomName string) {
-	h.action(ctx, "bed arranged for sleep", employeeName, roomName)
-
-	if err := h.actionConsumeItem(ctx, "added calm tea bags", "teaBags", 1, employeeName, roomName); err != nil {
-		slog.ErrorContext(ctx, "failed to add calm tea bags", "error", err)
-	}
-
-	if err := h.actionConsumeItem(ctx, "added aroma candle", "aromaCandle", 1, employeeName, roomName); err != nil {
-		slog.ErrorContext(ctx, "failed to add aroma candle", "error", err)
-	}
-}
-
-func (h *Housekeeper) action(ctx context.Context, action string, employeeName string, roomName string) {
+func (h *housekeeper) action(ctx context.Context, action string, employeeName string, roomName string) {
 	slog.InfoContext(ctx,
 		action,
 		"employeeName", employeeName,
@@ -161,33 +129,66 @@ func (h *Housekeeper) action(ctx context.Context, action string, employeeName st
 	)
 }
 
-func (h *Housekeeper) actionConsumeItem(ctx context.Context, action string, item string, quantity int,
+func (h *housekeeper) actionConsumeItemRetry(ctx context.Context, action string, item string, quantity int,
+	employeeName string, roomName string) {
+	err := h.actionConsumeItem(ctx, action, item, quantity, employeeName, roomName)
+	if err == nil {
+		return
+	}
+
+	var stockErr *dbErrors.StockInsufficientQuantityErr
+	if !errors.As(err, &stockErr) {
+		slog.ErrorContext(ctx, "failed to consume item", "employeeName", employeeName, "roomName", roomName, "error", err)
+		return
+	}
+
+	slog.WarnContext(ctx,
+		"stock item unavailable for housekeeper action, requesting restock",
+		"employeeName", employeeName,
+		"roomName", roomName,
+		"itemName", stockErr.ItemName,
+		"requestedQuantity", stockErr.Quantity,
+	)
+
+	if err := h.stoker.ImmediateRestock(ctx, item); err != nil {
+		slog.ErrorContext(ctx, "failed to restock item", "employeeName", employeeName, "roomName", roomName, "error", err)
+		return
+	}
+
+	if err := h.actionConsumeItem(ctx, action, item, quantity, employeeName, roomName); err != nil {
+		slog.ErrorContext(ctx, "failed to consume item after restock", "employeeName", employeeName, "roomName", roomName, "error", err)
+	}
+}
+
+func (h *housekeeper) actionConsumeItem(ctx context.Context, action string, item string, quantity int,
 	employeeName string, roomName string) error {
 
-	if err := h.stockRepo.ConsumeItem(ctx, item, quantity); err != nil {
-		return err
+	err := h.stockRepo.ConsumeItem(ctx, item, quantity)
+	if err == nil {
+		slog.InfoContext(ctx, action, "employeeName", employeeName, "roomName", roomName)
+
+		return nil
 	}
 
-	slog.InfoContext(ctx,
-		action,
-		"employeeName", employeeName,
-		"roomName", roomName,
-	)
-
-	return nil
+	return err
 }
 
-func (h *Housekeeper) actionLaundry(ctx context.Context, action string, laundryItem string, employeeName string, roomName string) {
+func (h *housekeeper) updateCleaningStatus(ctx context.Context, employeeName string, roomName string, cleaningStatus string) {
+	if err := h.cottageRepo.UpdateCleaningStatus(ctx, roomName, cleaningStatus); err != nil {
+		slog.ErrorContext(ctx,
+			"failed to update cleaning status",
+			"employeeName", employeeName,
+			"roomName", roomName,
+			"cleaningStatus", cleaningStatus,
+			"error", err,
+		)
+	}
+}
+
+func (h *housekeeper) actionLaundry(ctx context.Context, action string, laundryItem string, employeeName string, roomName string) {
 	laundryRequest := domain.WashRequest{
 		RoomName: roomName,
-	}
-
-	if laundryItem != "linens" {
-		laundryRequest.Linens = true
-	}
-
-	if laundryItem != "towels" {
-		laundryRequest.Towels = true
+		Item:     laundryItem,
 	}
 
 	h.laundererRequestChan <- laundryRequest
@@ -198,36 +199,4 @@ func (h *Housekeeper) actionLaundry(ctx context.Context, action string, laundryI
 		"employeeName", employeeName,
 		"roomName", roomName,
 	)
-}
-
-func (h *Housekeeper) actionRestockAmenities(ctx context.Context, employeeName string, roomName string) error {
-
-	var restockErr error
-	if err := h.stockRepo.ConsumeItem(ctx, "waterBottle", 2); err != nil {
-		restockErr = errors.Join(restockErr, err)
-	}
-	if err := h.stockRepo.ConsumeItem(ctx, "teaBags", 2); err != nil {
-		restockErr = errors.Join(restockErr, err)
-	}
-	if err := h.stockRepo.ConsumeItem(ctx, "sweets", 3); err != nil {
-		restockErr = errors.Join(restockErr, err)
-	}
-	if err := h.stockRepo.ConsumeItem(ctx, "chips", 1); err != nil {
-		restockErr = errors.Join(restockErr, err)
-	}
-	if err := h.stockRepo.ConsumeItem(ctx, "bathroomAmenities", 5); err != nil {
-		restockErr = errors.Join(restockErr, err)
-	}
-
-	if restockErr != nil {
-		return restockErr
-	}
-
-	slog.InfoContext(ctx,
-		"amenities restocked",
-		"employeeName", employeeName,
-		"roomName", roomName,
-	)
-
-	return nil
 }

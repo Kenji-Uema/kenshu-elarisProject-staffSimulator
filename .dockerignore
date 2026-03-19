@@ -1,0 +1,10 @@
+.git
+.gitignore
+.idea
+*.iml
+
+tmp
+dist
+bin
+
+.DS_Store

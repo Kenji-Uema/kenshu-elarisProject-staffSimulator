@@ -1,0 +1,37 @@
+[
+  {
+    "Id": "96a7d3bb21169a393dd1db1b",
+    "CleaningItems": {
+      "Name": "cleaningItem",
+      "Quantity": 100
+    },
+    "BathroomAmenities": {
+      "Name": "bathroomAmenities",
+      "Quantity": 100
+    },
+    "AromaCandles": {
+      "Name": "aromaCandle",
+      "Quantity": 100
+    },
+    "WaterBottle": {
+      "Name": "waterBottle",
+      "Quantity": 100
+    },
+    "WineBottle": {
+      "Name": "wineBottle",
+      "Quantity": 100
+    },
+    "TeaBags": {
+      "Name": "teaBags",
+      "Quantity": 100
+    },
+    "Sweets": {
+      "Name": "sweets",
+      "Quantity": 100
+    },
+    "Chips": {
+      "Name": "chips",
+      "Quantity": 100
+    }
+  }
+]

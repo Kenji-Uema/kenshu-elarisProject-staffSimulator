@@ -29,7 +29,7 @@ const file_clock_nowService_proto_rawDesc = "" +
 	"\n" +
 	"\x16clock/nowService.proto\x12\x05clock\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a\x16event/time_event.proto2?\n" +
 	"\fClockService\x12/\n" +
-	"\x03Now\x12\x16.google.protobuf.Empty\x1a\x10.event.TimeEventBJZHgithub.com/Kenji-Uema/staffSimulator/internal/transport/grpc/clock;clockb\x06proto3"
+	"\x03Now\x12\x16.google.protobuf.Empty\x1a\x10.event.TimeEventBAZ?github.com/Kenji-Uema/staffSimulator/internal/infra/clock;clockb\x06proto3"
 
 var file_clock_nowService_proto_goTypes = []any{
 	(*emptypb.Empty)(nil), // 0: google.protobuf.Empty

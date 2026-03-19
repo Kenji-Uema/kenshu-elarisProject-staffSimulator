@@ -6,150 +6,275 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 
 	"github.com/Kenji-Uema/staffSimulator/internal/app"
 	"github.com/Kenji-Uema/staffSimulator/internal/config"
 	"github.com/Kenji-Uema/staffSimulator/internal/domain"
+	grpcclock "github.com/Kenji-Uema/staffSimulator/internal/infra/clock"
+	"github.com/Kenji-Uema/staffSimulator/internal/infra/logging"
 	"github.com/Kenji-Uema/staffSimulator/internal/infra/mdb"
 	"github.com/Kenji-Uema/staffSimulator/internal/infra/mq"
 	"github.com/Kenji-Uema/staffSimulator/internal/infra/telemetry"
-	grpcclock "github.com/Kenji-Uema/staffSimulator/internal/transport/grpc/clock"
-)
-
-const (
-	cleaningQueueName  = "cleaning.requests"
-	dayChangeQueueName = "day.change"
+	"github.com/Kenji-Uema/staffSimulator/internal/port"
 )
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	if err := run(ctx); err != nil {
-		slog.ErrorContext(ctx, "service stopped with error", "error", err)
+		slog.ErrorContext(ctx, "staff simulator failed", "error", err)
 		os.Exit(1)
 	}
 }
 
 func run(ctx context.Context) error {
-	cfg, err := config.LoadConfigs()
+	configs, err := config.LoadConfigs()
 	if err != nil {
 		return err
 	}
 
-	shutdownTelemetry, err := telemetry.Init(ctx, cfg.TelemetryConfig, cfg.AppConfig)
+	slog.SetDefault(logging.NewLogger(configs.AppConfig))
+	slog.InfoContext(ctx, "staff simulator starting")
+
+	shutdownTelemetry, err := telemetry.Init(ctx, configs.AppConfig)
 	if err != nil {
 		return err
 	}
+	telemetryInitialized := true
 	defer func() {
-		if err := shutdownTelemetry(context.Background()); err != nil {
-			slog.Error("failed to shutdown telemetry", "error", err)
+		if telemetryInitialized {
+			if shutdownErr := shutdownTelemetry(context.Background()); shutdownErr != nil {
+				slog.Error("failed to shutdown telemetry", "error", shutdownErr)
+			}
 		}
 	}()
 
-	mongoDB, err := mdb.NewMongoDb(ctx, cfg.MongoConfig)
+	mongoDB, err := initMongoDb(ctx, err, configs)
 	if err != nil {
 		return err
 	}
+	mongoInitialized := true
 	defer func() {
-		if err := mongoDB.Close(context.Background()); err != nil {
-			slog.Error("failed to close mongo connection", "error", err)
+		if mongoInitialized {
+			if closeErr := mongoDB.connectionClose(context.Background()); closeErr != nil {
+				slog.Error("failed to close mongo connection", "error", closeErr)
+			}
 		}
 	}()
 
-	clockClient, err := grpcclock.NewClockEmu(cfg.ClockEmuConfig)
+	rabbitmq, err := initRabbitmq(ctx, err, configs)
 	if err != nil {
 		return err
 	}
+	rabbitInitialized := true
 	defer func() {
-		if err := clockClient.Close(); err != nil {
-			slog.Error("failed to close clock client", "error", err)
+		if rabbitInitialized {
+			closeConsumer(rabbitmq.hourChangeConsumer, "hour change consumer")
+			closeConsumer(rabbitmq.dayChangeConsumer, "day change consumer")
+			closeConsumer(rabbitmq.cleaningConsumer, "cleaning consumer")
+
+			if closeErr := rabbitmq.connectionClose(); closeErr != nil {
+				slog.Error("failed to close rabbitmq connection", "error", closeErr)
+			}
 		}
 	}()
 
-	rabbitConn, err := mq.NewRabbitMqConnection(ctx, cfg.RabbitMqConfig)
+	clockClient, err := grpcclock.NewClockClient(configs.Services)
 	if err != nil {
 		return err
 	}
+	clockInitialized := true
 	defer func() {
-		if err := rabbitConn.Close(); err != nil {
-			slog.Error("failed to close rabbitmq connection", "error", err)
+		if clockInitialized {
+			if closeErr := clockClient.Close(); closeErr != nil {
+				slog.Error("failed to close clock client", "error", closeErr)
+			}
 		}
 	}()
 
-	cleaningConsumer, err := mq.NewRabbitmqConsumer(rabbitConn, config.ConsumeConfig{})
-	if err != nil {
-		return err
-	}
-	defer closeConsumer(cleaningConsumer, "cleaning consumer")
+	channels := initChannels()
 
-	timeConsumer, err := mq.NewRabbitmqConsumer(rabbitConn, config.ConsumeConfig{})
-	if err != nil {
-		return err
-	}
-	defer closeConsumer(timeConsumer, "time consumer")
-
-	laundererTimeConsumer, err := mq.NewRabbitmqConsumer(rabbitConn, config.ConsumeConfig{})
-	if err != nil {
-		return err
-	}
-	defer closeConsumer(laundererTimeConsumer, "launderer time consumer")
-
-	if err := cleaningConsumer.DeclareQueue(ctx, config.QueueConfig{Name: cleaningQueueName}); err != nil {
-		return err
-	}
-	if err := timeConsumer.DeclareQueue(ctx, config.QueueConfig{Name: dayChangeQueueName}); err != nil {
-		return err
-	}
-	if err := laundererTimeConsumer.DeclareQueue(ctx, config.QueueConfig{Name: dayChangeQueueName}); err != nil {
-		return err
-	}
-
-	stockRepo := mdb.NewStockRepo(mongoDB.Database)
-
-	cleaningCh := make(chan domain.CleaningRequest, 32)
-	laundererCh := make(chan domain.WashRequest, 32)
-	stockerCh := make(chan domain.RestockRequest, 16)
-
-	housekeeperService, err := app.NewHousekeeperService([]string{"housekeeper-1"}, *clockClient, stockRepo, laundererCh)
+	services, err := initServices(configs.AppConfig, mongoDB, rabbitmq, channels, clockClient)
 	if err != nil {
 		return err
 	}
 
-	laundererService, err := app.NewLaundererService([]string{"launderer-1"}, *clockClient, laundererTimeConsumer, stockRepo)
-	if err != nil {
-		return err
-	}
-
-	stockerService, err := app.NewStockerService([]string{"stocker-1"}, stockRepo)
-	if err != nil {
-		return err
-	}
-
-	managerService := app.NewManagerService(cleaningConsumer, timeConsumer, cleaningCh, stockerCh)
-
-	var wg sync.WaitGroup
-	start := func(name string, fn func()) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			slog.InfoContext(ctx, "starting worker", "name", name)
-			fn()
-		}()
-	}
-
-	start("housekeeper-service", func() { housekeeperService.Run(ctx, cleaningCh) })
-	start("launderer-service", func() { laundererService.Run(ctx, laundererCh) })
-	start("stocker-service", func() { stockerService.Run(ctx, stockerCh) })
-	start("manager-service", func() { managerService.Start(ctx) })
+	go services.housekeeperService.Work(ctx, channels.cleaning)
+	go services.laundererService.Work(ctx, channels.launderer)
+	go services.stockerService.Work(ctx, channels.stocker)
+	services.managerService.Start(ctx)
 
 	<-ctx.Done()
 	slog.InfoContext(ctx, "shutdown signal received")
-	wg.Wait()
+
+	clockInitialized = false
+	rabbitInitialized = false
+	mongoInitialized = false
+	telemetryInitialized = false
+	shutdown(shutdownTelemetry, mongoDB, rabbitmq, clockClient)
 
 	return nil
+}
+
+func shutdown(shutdownTelemetry func(context.Context) error, mongoDB mongo, rabbitmq rabbitmq, clockClient port.Clock) {
+	if err := shutdownTelemetry(context.Background()); err != nil {
+		slog.Error("failed to shutdown telemetry", "error", err)
+	}
+
+	if err := mongoDB.connectionClose(context.Background()); err != nil {
+		slog.Error("failed to close mongo connection", "error", err)
+	}
+
+	closeConsumer(rabbitmq.hourChangeConsumer, "hour change consumer")
+	closeConsumer(rabbitmq.dayChangeConsumer, "day change consumer")
+	closeConsumer(rabbitmq.cleaningConsumer, "cleaning consumer")
+
+	if err := rabbitmq.connectionClose(); err != nil {
+		slog.Error("failed to close rabbitmq connection", "error", err)
+	}
+
+	if err := clockClient.Close(); err != nil {
+		slog.Error("failed to close clock client", "error", err)
+	}
+}
+
+type channels struct {
+	cleaning  chan domain.CleaningRequest
+	launderer chan domain.WashRequest
+	stocker   chan domain.RestockRequest
+}
+
+func initChannels() channels {
+	return channels{
+		cleaning:  make(chan domain.CleaningRequest, 32),
+		launderer: make(chan domain.WashRequest, 32),
+		stocker:   make(chan domain.RestockRequest, 16),
+	}
+}
+
+type services struct {
+	housekeeperService *app.HousekeeperService
+	laundererService   *app.LaundererService
+	stockerService     *app.StockerService
+	managerService     *app.ManagerService
+}
+
+func initServices(configs config.AppConfig, mongo mongo, rabbitmq rabbitmq, channels channels, clock port.Clock) (services, error) {
+	stockerService, err := app.NewStockerService(configs.Employees.Stockers, mongo.stockRepo)
+	if err != nil {
+		return services{}, err
+	}
+
+	housekeeperService, err := app.NewHousekeeperService(
+		configs.Employees.Housekeepers,
+		clock,
+		mongo.cottageRepo,
+		mongo.stockRepo,
+		stockerService,
+		channels.launderer,
+	)
+	if err != nil {
+		return services{}, err
+	}
+
+	laundererService, err := app.NewLaundererService(
+		configs.Employees.Launderers,
+		clock,
+		rabbitmq.hourChangeConsumer,
+		mongo.stockRepo,
+		stockerService,
+	)
+	if err != nil {
+		return services{}, err
+	}
+
+	managerService, err := app.NewManagerService(rabbitmq.cleaningConsumer, rabbitmq.dayChangeConsumer, channels.cleaning, channels.stocker)
+	if err != nil {
+		return services{}, err
+	}
+	return services{
+		housekeeperService: housekeeperService,
+		laundererService:   laundererService,
+		stockerService:     stockerService,
+		managerService:     managerService,
+	}, nil
+}
+
+type rabbitmq struct {
+	cleaningConsumer   port.MqConsumer
+	dayChangeConsumer  port.MqConsumer
+	hourChangeConsumer port.MqConsumer
+	connectionClose    func() error
+}
+
+func initRabbitmq(ctx context.Context, err error, configs config.Configs) (rabbitmq, error) {
+	rabbitConn, err := mq.NewRabbitMqConnection(ctx, configs.RabbitMqConfig)
+	if err != nil {
+		return rabbitmq{}, err
+	}
+
+	cleaningConsumer, err := mq.NewRabbitmqConsumer(rabbitConn, configs.RabbitMqConfig.Consumers.Cleaning.Consume)
+	if err != nil {
+		return rabbitmq{}, err
+	}
+
+	dayChangeConsumer, err := mq.NewRabbitmqConsumer(rabbitConn, configs.RabbitMqConfig.Consumers.DayChange.Consume)
+	if err != nil {
+		return rabbitmq{}, err
+	}
+
+	hourChangeConsumer, err := mq.NewRabbitmqConsumer(rabbitConn, configs.RabbitMqConfig.Consumers.HourChange.Consume)
+	if err != nil {
+		return rabbitmq{}, err
+	}
+
+	if err := cleaningConsumer.DeclareQueue(ctx, configs.RabbitMqConfig.Consumers.Cleaning.Queue); err != nil {
+		return rabbitmq{}, err
+	}
+	if err := cleaningConsumer.BindQueue(ctx, configs.RabbitMqConfig.Consumers.Cleaning.Binding); err != nil {
+		return rabbitmq{}, err
+	}
+	if err := dayChangeConsumer.DeclareQueue(ctx, configs.RabbitMqConfig.Consumers.DayChange.Queue); err != nil {
+		return rabbitmq{}, err
+	}
+	if err := dayChangeConsumer.BindQueue(ctx, configs.RabbitMqConfig.Consumers.DayChange.Binding); err != nil {
+		return rabbitmq{}, err
+	}
+	if err := hourChangeConsumer.DeclareQueue(ctx, configs.RabbitMqConfig.Consumers.HourChange.Queue); err != nil {
+		return rabbitmq{}, err
+	}
+	if err := hourChangeConsumer.BindQueue(ctx, configs.RabbitMqConfig.Consumers.HourChange.Binding); err != nil {
+		return rabbitmq{}, err
+	}
+	return rabbitmq{
+		cleaningConsumer:   cleaningConsumer,
+		dayChangeConsumer:  dayChangeConsumer,
+		hourChangeConsumer: hourChangeConsumer,
+		connectionClose:    rabbitConn.Close,
+	}, nil
+}
+
+type mongo struct {
+	stockRepo       port.StockRepo
+	cottageRepo     port.CottageRepo
+	connectionClose func(context.Context) error
+}
+
+func initMongoDb(ctx context.Context, err error, configs config.Configs) (mongo, error) {
+	mongoDB, err := mdb.NewMongoDb(ctx, configs.MongoConfig)
+	if err != nil {
+		return mongo{}, err
+	}
+
+	stockRepo := mdb.NewStockRepo(mongoDB.Database)
+	cottageRepo := mdb.NewCottageRepo(mongoDB.Database)
+	return mongo{
+		stockRepo:       stockRepo,
+		cottageRepo:     cottageRepo,
+		connectionClose: mongoDB.Close,
+	}, nil
 }
 
 func closeConsumer(consumer interface{ CloseChannel() error }, name string) {
