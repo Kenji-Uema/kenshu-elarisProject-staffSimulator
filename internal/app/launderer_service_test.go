@@ -75,8 +75,8 @@ func TestLaundererServiceRun(t *testing.T) {
 			if stockRepo.ConsumeItemCallCount != 1 {
 				t.Fatalf("ConsumeItemCallCount = %d, want 1", stockRepo.ConsumeItemCallCount)
 			}
-			if stockRepo.LastConsumeItemName != "towels" {
-				t.Fatalf("LastConsumeItemName = %q, want %q", stockRepo.LastConsumeItemName, "towels")
+			if stockRepo.LastConsumeItemName != "soap" {
+				t.Fatalf("LastConsumeItemName = %q, want %q", stockRepo.LastConsumeItemName, "soap")
 			}
 			if stockRepo.LastConsumeQuantity != 10 {
 				t.Fatalf("LastConsumeQuantity = %d, want 10", stockRepo.LastConsumeQuantity)
@@ -99,8 +99,8 @@ func TestLaundererServiceRun(t *testing.T) {
 			if stockRepo.ConsumeItemCallCount != 1 {
 				t.Fatalf("ConsumeItemCallCount = %d, want 1", stockRepo.ConsumeItemCallCount)
 			}
-			if stockRepo.LastConsumeItemName != "linens" {
-				t.Fatalf("LastConsumeItemName = %q, want %q", stockRepo.LastConsumeItemName, "linens")
+			if stockRepo.LastConsumeItemName != "soap" {
+				t.Fatalf("LastConsumeItemName = %q, want %q", stockRepo.LastConsumeItemName, "soap")
 			}
 			if stockRepo.LastConsumeQuantity != 20 {
 				t.Fatalf("LastConsumeQuantity = %d, want 20", stockRepo.LastConsumeQuantity)
@@ -159,8 +159,8 @@ func TestLaundererWorkRetry(t *testing.T) {
 			if stockRepo.RestockItemCallCount != 1 {
 				t.Fatalf("RestockItemCallCount = %d, want 1", stockRepo.RestockItemCallCount)
 			}
-			if stockRepo.LastRestockItemName != "linens" {
-				t.Fatalf("LastRestockItemName = %q, want %q", stockRepo.LastRestockItemName, "linens")
+			if stockRepo.LastRestockItemName != "soap" {
+				t.Fatalf("LastRestockItemName = %q, want %q", stockRepo.LastRestockItemName, "soap")
 			}
 			if stockRepo.LastRestockQuantity != stockReplenishmentQuantity {
 				t.Fatalf("LastRestockQuantity = %d, want %d", stockRepo.LastRestockQuantity, stockReplenishmentQuantity)

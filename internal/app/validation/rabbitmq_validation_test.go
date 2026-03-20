@@ -38,11 +38,12 @@ func TestValidator_AllowedContentType(t *testing.T) {
 		input          string
 		isInputInvalid bool
 	}{
-		"allowed json":   {"application/json", false},
-		"uppercase JSON": {"APPLICATION/JSON", true},
-		"text plain":     {"text/plain", true},
-		"empty string":   {"", true},
-		"multipart":      {"multipart/form-data", true},
+		"allowed protobuf":   {"application/protobuf", false},
+		"json rejected":      {"application/json", true},
+		"uppercase protobuf": {"APPLICATION/PROTOBUF", true},
+		"text plain":         {"text/plain", true},
+		"empty string":       {"", true},
+		"multipart":          {"multipart/form-data", true},
 	}
 
 	for caseName, test := range testCases {

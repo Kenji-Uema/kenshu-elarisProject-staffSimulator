@@ -7,6 +7,7 @@ import (
 
 	"github.com/Kenji-Uema/staffSimulator/internal/app/validation"
 	"github.com/Kenji-Uema/staffSimulator/internal/domain"
+	"github.com/Kenji-Uema/staffSimulator/internal/domain/documents"
 	"github.com/Kenji-Uema/staffSimulator/internal/domain/errors/dbErrors"
 	"github.com/Kenji-Uema/staffSimulator/internal/port"
 )
@@ -77,15 +78,15 @@ func (h *housekeeper) work(ctx context.Context, employeeName string, request dom
 
 	switch request.RequestType {
 	case "PREPARE_FOR_GUEST":
-		h.actionConsumeItemRetry(ctx, "added wine bottle", "wine", 1, employeeName, request.RoomName)
+		h.actionConsumeItemRetry(ctx, "added wine bottle", documents.WineBottle, 1, employeeName, request.RoomName)
 		h.action(ctx, "added a vase of flower", employeeName, request.RoomName)
 		h.action(ctx, "added a welcoming message", employeeName, request.RoomName)
-		h.actionConsumeItemRetry(ctx, "added aroma candle", "aromaCandle", 1, employeeName, request.RoomName)
+		h.actionConsumeItemRetry(ctx, "added aroma candle", documents.AromaCandle, 1, employeeName, request.RoomName)
 		h.updateCleaningStatus(ctx, employeeName, request.RoomName, "PREPARED_FOR_GUEST")
 	case "DAILY_CLEANING":
 		h.action(ctx, "trash taken out", employeeName, request.RoomName)
 		h.action(ctx, "bed arranged", employeeName, request.RoomName)
-		h.actionConsumeItemRetry(ctx, "bathroom cleaned", "cleaningItem", 5, employeeName, request.RoomName)
+		h.actionConsumeItemRetry(ctx, "bathroom cleaned", documents.CleaningItem, 5, employeeName, request.RoomName)
 		h.actionLaundry(ctx, "towels changed", "towels", employeeName, request.RoomName)
 		h.action(ctx, "vacuum cleaned", employeeName, request.RoomName)
 		h.updateCleaningStatus(ctx, employeeName, request.RoomName, "DAILY_CLEANED")
@@ -93,13 +94,13 @@ func (h *housekeeper) work(ctx context.Context, employeeName string, request dom
 		h.action(ctx, "trash taken out", employeeName, request.RoomName)
 		h.actionLaundry(ctx, "towels changed", "towels", employeeName, request.RoomName)
 		h.actionLaundry(ctx, "linens changed", "linens", employeeName, request.RoomName)
-		h.actionConsumeItemRetry(ctx, "bathroom cleaned", "cleaningItem", 10, employeeName, request.RoomName)
+		h.actionConsumeItemRetry(ctx, "bathroom cleaned", documents.CleaningItem, 10, employeeName, request.RoomName)
 		h.action(ctx, "bedroom detailed cleaned", employeeName, request.RoomName)
 		h.updateCleaningStatus(ctx, employeeName, request.RoomName, "FULLY_CLEANED")
 	case "PREPARE_FOR_SLEEP":
 		h.action(ctx, "bed arranged for sleep", employeeName, request.RoomName)
-		h.actionConsumeItemRetry(ctx, "added calm tea bags", "teaBags", 1, employeeName, request.RoomName)
-		h.actionConsumeItemRetry(ctx, "added aroma candle", "aromaCandle", 1, employeeName, request.RoomName)
+		h.actionConsumeItemRetry(ctx, "added calm tea bags", documents.TeaBags, 1, employeeName, request.RoomName)
+		h.actionConsumeItemRetry(ctx, "added aroma candle", documents.AromaCandle, 1, employeeName, request.RoomName)
 		h.updateCleaningStatus(ctx, employeeName, request.RoomName, "PREPARED_FOR_SLEEP")
 	default:
 		slog.ErrorContext(ctx, "unknown cleaning request", "request", request.RequestType)

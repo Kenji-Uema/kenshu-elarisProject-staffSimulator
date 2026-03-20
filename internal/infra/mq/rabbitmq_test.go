@@ -11,7 +11,7 @@ import (
 	"github.com/Kenji-Uema/staffSimulator/internal/domain/dto"
 	"github.com/Kenji-Uema/staffSimulator/internal/domain/errors/mqErrors"
 	"github.com/Kenji-Uema/staffSimulator/internal/port"
-	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestRabbitmqConsumerBindQueue(t *testing.T) {
@@ -102,9 +102,9 @@ func TestRabbitmqConsumerConsume(t *testing.T) {
 			RoomName: "A",
 			Request:  dto.RequestType_DAILY_CLEANING,
 		}
-		wantBody, err := protojson.Marshal(msg)
+		wantBody, err := proto.Marshal(msg)
 		if err != nil {
-			t.Fatalf("protojson.Marshal() error = %v", err)
+			t.Fatalf("proto.Marshal() error = %v", err)
 		}
 
 		if err := producer.Publish(context.Background(), msg, routingKey); err != nil {
@@ -118,6 +118,9 @@ func TestRabbitmqConsumerConsume(t *testing.T) {
 			}
 			if delivery.RoutingKey != routingKey {
 				t.Fatalf("RoutingKey = %q, want %q", delivery.RoutingKey, routingKey)
+			}
+			if delivery.ContentType != "application/protobuf" {
+				t.Fatalf("ContentType = %q, want %q", delivery.ContentType, "application/protobuf")
 			}
 			if string(delivery.Body) != string(wantBody) {
 				t.Fatalf("Body = %s, want %s", string(delivery.Body), string(wantBody))

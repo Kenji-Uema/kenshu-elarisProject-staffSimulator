@@ -5,6 +5,10 @@
       "Name": "cleaningItem",
       "Quantity": 100
     },
+    "Soap": {
+      "Name": "soap",
+      "Quantity": 100
+    },
     "BathroomAmenities": {
       "Name": "bathroomAmenities",
       "Quantity": 100

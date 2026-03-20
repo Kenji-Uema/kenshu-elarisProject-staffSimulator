@@ -13,8 +13,6 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
-	"google.golang.org/protobuf/encoding/protojson"
-
 	"google.golang.org/protobuf/proto"
 )
 
@@ -69,7 +67,7 @@ func (p *rabbitmqProducer) Publish(ctx context.Context, message proto.Message, r
 		}
 	}
 
-	payload, err := protojson.Marshal(message)
+	payload, err := proto.Marshal(message)
 	if err != nil {
 		slog.ErrorContext(ctx, "failed to marshal message", "error", err)
 		return &mqErrors.UnexpectedErr{Msg: "failed to marshal message", Err: err}
@@ -91,7 +89,7 @@ func (p *rabbitmqProducer) Publish(ctx context.Context, message proto.Message, r
 		p.publishConfig.Mandatory,
 		p.publishConfig.Immediate,
 		amqp.Publishing{
-			ContentType:  "application/json",
+			ContentType:  "application/protobuf",
 			Body:         payload,
 			DeliveryMode: amqp.Persistent,
 			Headers:      headers,

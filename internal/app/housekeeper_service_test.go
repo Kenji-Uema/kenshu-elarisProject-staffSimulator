@@ -277,7 +277,7 @@ func TestHousekeeperActionConsumeItemRetry(t *testing.T) {
 		consumeCalls := 0
 		stockRepo := &fakes.FakeStockRepo{
 			ConsumeItemFn: func(ctx context.Context, itemName string, quantity int) error {
-				if itemName != "wine" {
+				if itemName != "wineBottle" {
 					return nil
 				}
 
@@ -295,7 +295,7 @@ func TestHousekeeperActionConsumeItemRetry(t *testing.T) {
 			stoker:    &stocker{stockRepo: stockRepo},
 		}
 
-		housekeeper.actionConsumeItemRetry(context.Background(), "added wine bottle", "wine", 1, "alice", "A")
+		housekeeper.actionConsumeItemRetry(context.Background(), "added wine bottle", "wineBottle", 1, "Alice", "A")
 
 		if consumeCalls != 2 {
 			t.Fatalf("consume calls = %d, want 2", consumeCalls)
@@ -318,7 +318,7 @@ func TestHousekeeperActionConsumeItemRetry(t *testing.T) {
 			stoker:    &stocker{stockRepo: stockRepo},
 		}
 
-		housekeeper.actionConsumeItemRetry(context.Background(), "added wine bottle", "wine", 1, "alice", "A")
+		housekeeper.actionConsumeItemRetry(context.Background(), "added wine bottle", "wineBottle", 1, "Alice", "A")
 
 		if stockRepo.RestockItemCallCount != 0 {
 			t.Fatalf("RestockItemCallCount = %d, want 0", stockRepo.RestockItemCallCount)

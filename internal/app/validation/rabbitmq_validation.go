@@ -9,7 +9,7 @@ import (
 )
 
 var exchangeNameRe = regexp.MustCompile(`^ex\.[A-Za-z0-9_-]+$`)
-var allowedContentTypes = []string{"application/json"}
+var allowedContentTypes = []string{"application/protobuf"}
 
 func (v *Validator) ExchangeName(name string) *Validator {
 	v.steps = append(v.steps, func() error {

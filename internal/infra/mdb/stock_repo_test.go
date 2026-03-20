@@ -33,6 +33,9 @@ func TestStockRepoGetStock(t *testing.T) {
 			if got[documents.CleaningItem].Quantity != 100 {
 				t.Fatalf("cleaningItem quantity = %d, want 100", got[documents.CleaningItem].Quantity)
 			}
+			if got[documents.Soap].Quantity != 100 {
+				t.Fatalf("soap quantity = %d, want 100", got[documents.Soap].Quantity)
+			}
 			if got[documents.AromaCandle].Name != documents.AromaCandle {
 				t.Fatalf("aromaCandle name = %q, want %q", got[documents.AromaCandle].Name, documents.AromaCandle)
 			}
@@ -72,7 +75,8 @@ func TestStockRepoGetStock(t *testing.T) {
 			}
 
 			_, err := collection.InsertOne(ctx, bson.M{
-				"cleaning_items": "invalid-shape",
+				"cleaning_items": bson.M{"name": "cleaningItem", "quantity": 100},
+				"soap":           "invalid-shape",
 			})
 			if err != nil {
 				t.Fatalf("InsertOne() error = %v", err)
@@ -106,10 +110,34 @@ func TestStockRepoConsumeItem(t *testing.T) {
 			if err := repo.ConsumeItem(ctx, documents.CleaningItem, 5); err != nil {
 				t.Fatalf("ConsumeItem() error = %v", err)
 			}
+			if err := repo.ConsumeItem(ctx, documents.Soap, 5); err != nil {
+				t.Fatalf("ConsumeItem() error = %v", err)
+			}
 
 			got := mustFindStock(t, ctx, collection)
 			if got.CleaningItems.Quantity != 95 {
 				t.Fatalf("CleaningItems.Quantity = %d, want 95", got.CleaningItems.Quantity)
+			}
+			if got.Soap.Quantity != 95 {
+				t.Fatalf("Soap.Quantity = %d, want 95", got.Soap.Quantity)
+			}
+		})
+	})
+
+	t.Run("consumes quantity from soap stock item", func(t *testing.T) {
+		setupAndRun(t, func(t *testing.T, _ *mongo.Collection, collection *mongo.Collection) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+
+			repo := &stockRepo{collection: collection}
+
+			if err := repo.ConsumeItem(ctx, documents.Soap, 5); err != nil {
+				t.Fatalf("ConsumeItem() error = %v", err)
+			}
+
+			got := mustFindStock(t, ctx, collection)
+			if got.Soap.Quantity != 95 {
+				t.Fatalf("Soap.Quantity = %d, want 95", got.Soap.Quantity)
 			}
 		})
 	})
@@ -133,6 +161,25 @@ func TestStockRepoConsumeItem(t *testing.T) {
 		})
 	})
 
+	t.Run("returns insufficient quantity when soap stock is too low", func(t *testing.T) {
+		setupAndRun(t, func(t *testing.T, _ *mongo.Collection, collection *mongo.Collection) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+
+			repo := &stockRepo{collection: collection}
+
+			err := repo.ConsumeItem(ctx, documents.Soap, 101)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+
+			var target *dbErrors.StockInsufficientQuantityErr
+			if !errors.As(err, &target) {
+				t.Fatalf("error type = %T, want %T", err, target)
+			}
+		})
+	})
+
 	t.Run("returns not found when stock document does not exist", func(t *testing.T) {
 		setupAndRun(t, func(t *testing.T, _ *mongo.Collection, collection *mongo.Collection) {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -145,6 +192,29 @@ func TestStockRepoConsumeItem(t *testing.T) {
 			repo := &stockRepo{collection: collection}
 
 			err := repo.ConsumeItem(ctx, documents.CleaningItem, 1)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+
+			var target *dbErrors.ErrStockDoesNotExist
+			if !errors.As(err, &target) {
+				t.Fatalf("error type = %T, want %T", err, target)
+			}
+		})
+	})
+
+	t.Run("returns not found when stock document does not exist for soap", func(t *testing.T) {
+		setupAndRun(t, func(t *testing.T, _ *mongo.Collection, collection *mongo.Collection) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+
+			if err := collection.Drop(ctx); err != nil {
+				t.Fatalf("Drop() error = %v", err)
+			}
+
+			repo := &stockRepo{collection: collection}
+
+			err := repo.ConsumeItem(ctx, documents.Soap, 1)
 			if err == nil {
 				t.Fatal("expected error, got nil")
 			}

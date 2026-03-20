@@ -33,10 +33,10 @@ type AppConfig struct {
 		Level int `env:"LOG_LEVEL,required" envDefault:"0"`
 	}
 	Telemetry struct {
-		OTLPEndpoint   string `env:"OTEL_EXPORTER_OTLP_ENDPOINT,required"`
-		OTLPGrpcPort   int    `env:"OTEL_EXPORTER_OTLP_GRPC_PORT,required"`
-		OTLPHealthPort int    `env:"OTEL_EXPORTER_OTLP_HEALTH_PORT,required"`
-		OTLPInsecure   bool   `env:"OTEL_EXPORTER_OTLP_INSECURE,required"`
+		OTLPEndpoint   string `env:"OTEL_EXPORTER_OTLP_ENDPOINT"`
+		OTLPGrpcPort   int    `env:"OTEL_EXPORTER_OTLP_GRPC_PORT"`
+		OTLPHealthPort int    `env:"OTEL_EXPORTER_OTLP_HEALTH_PORT"`
+		OTLPInsecure   bool   `env:"OTEL_EXPORTER_OTLP_INSECURE"`
 	}
 	Employees struct {
 		Housekeepers []string `env:"CLEANING_EMPLOYEES_NAMES,required"`

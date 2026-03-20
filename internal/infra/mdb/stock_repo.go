@@ -147,6 +147,8 @@ func stockItemQuantityField(itemName string) (string, error) {
 	switch itemName {
 	case documents.CleaningItem:
 		return "cleaning_items.quantity", nil
+	case documents.Soap:
+		return "soap.quantity", nil
 	case documents.BathroomAmenities:
 		return "bathroom_amenities.quantity", nil
 	case documents.AromaCandle:

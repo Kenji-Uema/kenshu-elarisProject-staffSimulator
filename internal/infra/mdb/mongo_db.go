@@ -3,6 +3,7 @@ package mdb
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Kenji-Uema/staffSimulator/internal/config"
@@ -18,7 +19,7 @@ type Mdb struct {
 }
 
 func NewMongoDb(ctx context.Context, config config.MongoConfig) (*Mdb, error) {
-	uri := fmt.Sprintf("mongodb://%s:%s@%s", config.Conn.Username, config.Conn.Password, config.Conn.Host)
+	uri := buildMongoURI(config)
 
 	clientOptions := options.Client().
 		ApplyURI(uri).
@@ -41,6 +42,15 @@ func NewMongoDb(ctx context.Context, config config.MongoConfig) (*Mdb, error) {
 	}
 
 	return &Mdb{client: client, Database: client.Database(config.Conn.Database)}, nil
+}
+
+func buildMongoURI(config config.MongoConfig) string {
+	host := config.Conn.Host
+	if strings.HasPrefix(host, "mongodb://") || strings.HasPrefix(host, "mongodb+srv://") {
+		return host
+	}
+
+	return fmt.Sprintf("mongodb://%s:%s@%s", string(config.Conn.Username), string(config.Conn.Password), host)
 }
 
 func (d *Mdb) Ping() error {

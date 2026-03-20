@@ -9,6 +9,7 @@ import (
 
 	"github.com/Kenji-Uema/staffSimulator/internal/app/validation"
 	"github.com/Kenji-Uema/staffSimulator/internal/domain"
+	"github.com/Kenji-Uema/staffSimulator/internal/domain/documents"
 	"github.com/Kenji-Uema/staffSimulator/internal/domain/errors/dbErrors"
 	"github.com/Kenji-Uema/staffSimulator/internal/port"
 )
@@ -107,7 +108,7 @@ func (l *launderer) work(ctx context.Context, employeeName string, request domai
 		"requestedQuantity", stockErr.Quantity,
 	)
 
-	if restockErr := l.stocker.ImmediateRestock(ctx, request.Item); restockErr != nil {
+	if restockErr := l.stocker.ImmediateRestock(ctx, stockErr.ItemName); restockErr != nil {
 		slog.ErrorContext(ctx, "failed to restock item", "employeeName", employeeName, "roomName", request.RoomName, "error", restockErr)
 		return
 	}
@@ -123,7 +124,7 @@ func (l *launderer) wash(ctx context.Context, item string, employeeName string, 
 		return fmt.Errorf("unsupported wash item: %s", item)
 	}
 
-	err := l.stockRepo.ConsumeItem(ctx, item, washConfig.soap)
+	err := l.stockRepo.ConsumeItem(ctx, documents.Soap, washConfig.soap)
 	if err == nil {
 		finishTime, err := l.washingCycle(ctx, *startTime, washConfig.cycleDurationInHours)
 		if err != nil {

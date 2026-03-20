@@ -4,6 +4,7 @@ import "go.mongodb.org/mongo-driver/v2/bson"
 
 const (
 	CleaningItem      string = "cleaningItem"
+	Soap              string = "soap"
 	BathroomAmenities string = "bathroomAmenities"
 	AromaCandle       string = "aromaCandle"
 	WaterBottle       string = "waterBottle"
@@ -15,6 +16,7 @@ const (
 
 var ManagedStockItemNames = []string{
 	CleaningItem,
+	Soap,
 	BathroomAmenities,
 	AromaCandle,
 	WaterBottle,
@@ -27,6 +29,7 @@ var ManagedStockItemNames = []string{
 type Stock struct {
 	Id                bson.ObjectID `bson:"_id,omitempty"`
 	CleaningItems     StockItem     `bson:"cleaning_items"`
+	Soap              StockItem     `bson:"soap"`
 	BathroomAmenities StockItem     `bson:"bathroom_amenities"`
 	AromaCandles      StockItem     `bson:"aroma_candles"`
 	WaterBottle       StockItem     `bson:"water_bottle"`
@@ -44,6 +47,7 @@ type StockItem struct {
 func (s *Stock) AsMap() map[string]StockItem {
 	return map[string]StockItem{
 		CleaningItem:      s.CleaningItems,
+		Soap:              s.Soap,
 		BathroomAmenities: s.BathroomAmenities,
 		AromaCandle:       s.AromaCandles,
 		WaterBottle:       s.WaterBottle,
