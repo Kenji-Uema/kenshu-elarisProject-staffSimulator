@@ -20,13 +20,19 @@ var channels = struct {
 }
 
 type Services struct {
-	HousekeeperService *HousekeeperService
-	LaundererService   *LaundererService
-	StockerService     *StockerService
-	ManagerService     *ManagerService
+	HousekeeperService           *HousekeeperService
+	LaundererService             *LaundererService
+	StockerService               *StockerService
+	ManagerService               *ManagerService
+	TimeEventNotificationService *TimeEventNotificationService
 }
 
 func NewServices(configs config.AppConfig, mongo infra.Mongo, rabbitmq infra.Rabbitmq, clock port.Clock) (Services, error) {
+	timeEventNotificationService, err := NewTimeEventNotificationService(rabbitmq.HourChangeConsumer, rabbitmq.DayChangeConsumer)
+	if err != nil {
+		return Services{}, err
+	}
+
 	stockerService, err := NewStockerService(configs.Employees.Stockers, mongo.StockRepo)
 	if err != nil {
 		return Services{}, err
@@ -47,7 +53,7 @@ func NewServices(configs config.AppConfig, mongo infra.Mongo, rabbitmq infra.Rab
 	laundererService, err := NewLaundererService(
 		configs.Employees.Launderers,
 		clock,
-		rabbitmq.HourChangeConsumer,
+		timeEventNotificationService,
 		mongo.StockRepo,
 		stockerService,
 	)
@@ -55,19 +61,21 @@ func NewServices(configs config.AppConfig, mongo infra.Mongo, rabbitmq infra.Rab
 		return Services{}, err
 	}
 
-	managerService, err := NewManagerService(rabbitmq.CleaningConsumer, rabbitmq.DayChangeConsumer, channels.cleaning, channels.stocker)
+	managerService, err := NewManagerService(rabbitmq.CleaningConsumer, timeEventNotificationService, channels.cleaning, channels.stocker)
 	if err != nil {
 		return Services{}, err
 	}
 	return Services{
-		HousekeeperService: housekeeperService,
-		LaundererService:   laundererService,
-		StockerService:     stockerService,
-		ManagerService:     managerService,
+		HousekeeperService:           housekeeperService,
+		LaundererService:             laundererService,
+		StockerService:               stockerService,
+		ManagerService:               managerService,
+		TimeEventNotificationService: timeEventNotificationService,
 	}, nil
 }
 
 func (s Services) Start(ctx context.Context) {
+	go s.TimeEventNotificationService.Start(ctx)
 	go s.HousekeeperService.Work(ctx, channels.cleaning)
 	go s.LaundererService.Work(ctx, channels.launderer)
 	go s.StockerService.Work(ctx, channels.stocker)

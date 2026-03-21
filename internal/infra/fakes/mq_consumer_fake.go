@@ -26,6 +26,7 @@ type FakeMqConsumer struct {
 	LastDeclareCtx    context.Context
 	LastBindCtx       context.Context
 	LastConsumeCtx    context.Context
+	LastAck           *FakeAcknowledger
 }
 
 func (f *FakeMqConsumer) DeclareQueue(ctx context.Context, cfg config.QueueConfig) error {

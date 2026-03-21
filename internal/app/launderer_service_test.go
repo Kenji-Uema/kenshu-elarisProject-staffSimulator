@@ -7,19 +7,15 @@ import (
 	"time"
 
 	"github.com/Kenji-Uema/staffSimulator/internal/domain"
-	"github.com/Kenji-Uema/staffSimulator/internal/domain/dto"
 	"github.com/Kenji-Uema/staffSimulator/internal/domain/errors/dbErrors"
 	"github.com/Kenji-Uema/staffSimulator/internal/infra/fakes"
-	amqp "github.com/rabbitmq/amqp091-go"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestNewLaundererService(t *testing.T) {
 	t.Parallel()
 
 	t.Run("returns error when no employees are configured", func(t *testing.T) {
-		service, err := NewLaundererService(nil, &fakes.FakeClockClient{}, &fakes.FakeMqConsumer{}, &fakes.FakeStockRepo{}, nil)
+		service, err := NewLaundererService(nil, &fakes.FakeClockClient{}, &fakeLaundererTimeEventRegistry{}, &fakes.FakeStockRepo{}, nil)
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
@@ -28,10 +24,10 @@ func TestNewLaundererService(t *testing.T) {
 		}
 	})
 
-	t.Run("returns error when hour change consumer is nil", func(t *testing.T) {
-		var consumer *fakes.FakeMqConsumer
+	t.Run("returns error when hour change notifier is nil", func(t *testing.T) {
+		var notifier *fakeLaundererTimeEventRegistry
 
-		service, err := NewLaundererService([]string{"Alice"}, &fakes.FakeClockClient{}, consumer, &fakes.FakeStockRepo{}, nil)
+		service, err := NewLaundererService([]string{"Alice"}, &fakes.FakeClockClient{}, notifier, &fakes.FakeStockRepo{}, nil)
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
@@ -44,7 +40,7 @@ func TestNewLaundererService(t *testing.T) {
 		service, err := NewLaundererService(
 			[]string{"Alice"},
 			&fakes.FakeClockClient{},
-			&fakes.FakeMqConsumer{},
+			&fakeLaundererTimeEventRegistry{},
 			&fakes.FakeStockRepo{},
 			nil,
 		)
@@ -66,11 +62,20 @@ func TestLaundererServiceRun(t *testing.T) {
 	t.Parallel()
 
 	t.Run("washes towels", func(t *testing.T) {
-		validationFn := func(t *testing.T, consumer *fakes.FakeMqConsumer, stockRepo *fakes.FakeStockRepo) {
+		validationFn := func(t *testing.T, notifier *fakeLaundererTimeEventRegistry, stockRepo *fakes.FakeStockRepo) {
 			t.Helper()
 
-			if consumer.ConsumeCallCount != 1 {
-				t.Fatalf("ConsumeCallCount = %d, want 1", consumer.ConsumeCallCount)
+			if notifier.RegisterCallCount != 1 {
+				t.Fatalf("RegisterCallCount = %d, want 1", notifier.RegisterCallCount)
+			}
+			if notifier.LastRegisteredEventType != timeEventHourChange {
+				t.Fatalf("LastRegisteredEventType = %q, want %q", notifier.LastRegisteredEventType, timeEventHourChange)
+			}
+			if notifier.UnregisterCallCount != 1 {
+				t.Fatalf("UnregisterCallCount = %d, want 1", notifier.UnregisterCallCount)
+			}
+			if notifier.LastUnregisteredEventType != timeEventHourChange {
+				t.Fatalf("LastUnregisteredEventType = %q, want %q", notifier.LastUnregisteredEventType, timeEventHourChange)
 			}
 			if stockRepo.ConsumeItemCallCount != 1 {
 				t.Fatalf("ConsumeItemCallCount = %d, want 1", stockRepo.ConsumeItemCallCount)
@@ -90,11 +95,20 @@ func TestLaundererServiceRun(t *testing.T) {
 	})
 
 	t.Run("washes linens", func(t *testing.T) {
-		validationFn := func(t *testing.T, consumer *fakes.FakeMqConsumer, stockRepo *fakes.FakeStockRepo) {
+		validationFn := func(t *testing.T, notifier *fakeLaundererTimeEventRegistry, stockRepo *fakes.FakeStockRepo) {
 			t.Helper()
 
-			if consumer.ConsumeCallCount != 1 {
-				t.Fatalf("ConsumeCallCount = %d, want 1", consumer.ConsumeCallCount)
+			if notifier.RegisterCallCount != 1 {
+				t.Fatalf("RegisterCallCount = %d, want 1", notifier.RegisterCallCount)
+			}
+			if notifier.LastRegisteredEventType != timeEventHourChange {
+				t.Fatalf("LastRegisteredEventType = %q, want %q", notifier.LastRegisteredEventType, timeEventHourChange)
+			}
+			if notifier.UnregisterCallCount != 1 {
+				t.Fatalf("UnregisterCallCount = %d, want 1", notifier.UnregisterCallCount)
+			}
+			if notifier.LastUnregisteredEventType != timeEventHourChange {
+				t.Fatalf("LastUnregisteredEventType = %q, want %q", notifier.LastUnregisteredEventType, timeEventHourChange)
 			}
 			if stockRepo.ConsumeItemCallCount != 1 {
 				t.Fatalf("ConsumeItemCallCount = %d, want 1", stockRepo.ConsumeItemCallCount)
@@ -114,11 +128,14 @@ func TestLaundererServiceRun(t *testing.T) {
 	})
 
 	t.Run("does not consume stock for unsupported item", func(t *testing.T) {
-		validationFn := func(t *testing.T, consumer *fakes.FakeMqConsumer, stockRepo *fakes.FakeStockRepo) {
+		validationFn := func(t *testing.T, notifier *fakeLaundererTimeEventRegistry, stockRepo *fakes.FakeStockRepo) {
 			t.Helper()
 
-			if consumer.ConsumeCallCount != 0 {
-				t.Fatalf("ConsumeCallCount = %d, want 0", consumer.ConsumeCallCount)
+			if notifier.RegisterCallCount != 0 {
+				t.Fatalf("RegisterCallCount = %d, want 0", notifier.RegisterCallCount)
+			}
+			if notifier.UnregisterCallCount != 0 {
+				t.Fatalf("UnregisterCallCount = %d, want 0", notifier.UnregisterCallCount)
 			}
 			if stockRepo.ConsumeItemCallCount != 0 {
 				t.Fatalf("ConsumeItemCallCount = %d, want 0", stockRepo.ConsumeItemCallCount)
@@ -147,11 +164,20 @@ func TestLaundererWorkRetry(t *testing.T) {
 			},
 		}
 
-		validationFn := func(t *testing.T, consumer *fakes.FakeMqConsumer, stockRepo *fakes.FakeStockRepo) {
+		validationFn := func(t *testing.T, notifier *fakeLaundererTimeEventRegistry, stockRepo *fakes.FakeStockRepo) {
 			t.Helper()
 
-			if consumer.ConsumeCallCount != 1 {
-				t.Fatalf("ConsumeCallCount = %d, want 1", consumer.ConsumeCallCount)
+			if notifier.RegisterCallCount != 1 {
+				t.Fatalf("RegisterCallCount = %d, want 1", notifier.RegisterCallCount)
+			}
+			if notifier.LastRegisteredEventType != timeEventHourChange {
+				t.Fatalf("LastRegisteredEventType = %q, want %q", notifier.LastRegisteredEventType, timeEventHourChange)
+			}
+			if notifier.UnregisterCallCount != 1 {
+				t.Fatalf("UnregisterCallCount = %d, want 1", notifier.UnregisterCallCount)
+			}
+			if notifier.LastUnregisteredEventType != timeEventHourChange {
+				t.Fatalf("LastUnregisteredEventType = %q, want %q", notifier.LastUnregisteredEventType, timeEventHourChange)
 			}
 			if consumeCalls != 2 {
 				t.Fatalf("consumeCalls = %d, want 2", consumeCalls)
@@ -177,17 +203,20 @@ func TestLaundererWorkRetry(t *testing.T) {
 			},
 		}
 
-		validationFn := func(t *testing.T, consumer *fakes.FakeMqConsumer, stockRepo *fakes.FakeStockRepo) {
+		validationFn := func(t *testing.T, notifier *fakeLaundererTimeEventRegistry, stockRepo *fakes.FakeStockRepo) {
 			t.Helper()
 
+			if notifier.RegisterCallCount != 0 {
+				t.Fatalf("RegisterCallCount = %d, want 0", notifier.RegisterCallCount)
+			}
+			if notifier.UnregisterCallCount != 0 {
+				t.Fatalf("UnregisterCallCount = %d, want 0", notifier.UnregisterCallCount)
+			}
 			if stockRepo.RestockItemCallCount != 0 {
 				t.Fatalf("RestockItemCallCount = %d, want 0", stockRepo.RestockItemCallCount)
 			}
 			if stockRepo.ConsumeItemCallCount != 1 {
 				t.Fatalf("ConsumeItemCallCount = %d, want 1", stockRepo.ConsumeItemCallCount)
-			}
-			if consumer.ConsumeCallCount != 0 {
-				t.Fatalf("ConsumeCallCount = %d, want 0", consumer.ConsumeCallCount)
 			}
 		}
 
@@ -195,8 +224,51 @@ func TestLaundererWorkRetry(t *testing.T) {
 	})
 }
 
+func TestLaundererDoesNotRegisterWithoutWashRequests(t *testing.T) {
+	t.Parallel()
+
+	startTime := time.Date(2026, 3, 18, 10, 0, 0, 0, time.UTC)
+	clockClient := &fakes.FakeClockClient{
+		NowFn: func(ctx context.Context) (*time.Time, error) {
+			return &startTime, nil
+		},
+	}
+
+	notifier := &fakeLaundererTimeEventRegistry{}
+	service, err := NewLaundererService(
+		[]string{"Alice"},
+		clockClient,
+		notifier,
+		&fakes.FakeStockRepo{},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("NewLaundererService() error = %v", err)
+	}
+
+	requests := make(chan domain.WashRequest)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		service.Work(ctx, requests)
+		close(done)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	if notifier.RegisterCallCount != 0 {
+		t.Fatalf("RegisterCallCount = %d, want 0", notifier.RegisterCallCount)
+	}
+	if notifier.UnregisterCallCount != 0 {
+		t.Fatalf("UnregisterCallCount = %d, want 0", notifier.UnregisterCallCount)
+	}
+
+	cancel()
+	<-done
+}
+
 func laundererRun(t *testing.T, request domain.WashRequest, stockRepo *fakes.FakeStockRepo,
-	validate func(t *testing.T, consumer *fakes.FakeMqConsumer, stockRepo *fakes.FakeStockRepo)) {
+	validate func(t *testing.T, notifier *fakeLaundererTimeEventRegistry, stockRepo *fakes.FakeStockRepo)) {
 	t.Helper()
 
 	if stockRepo == nil {
@@ -204,6 +276,10 @@ func laundererRun(t *testing.T, request domain.WashRequest, stockRepo *fakes.Fak
 	}
 
 	startTime := time.Date(2026, 3, 18, 10, 0, 0, 0, time.UTC)
+	finishTime := startTime
+	if config, ok := washTable[request.Item]; ok {
+		finishTime = startTime.Add(time.Duration(config.cycleDurationInHours * float64(time.Hour)))
+	}
 
 	clockClient := &fakes.FakeClockClient{
 		NowFn: func(ctx context.Context) (*time.Time, error) {
@@ -211,24 +287,19 @@ func laundererRun(t *testing.T, request domain.WashRequest, stockRepo *fakes.Fak
 		},
 	}
 
-	consumer := &fakes.FakeMqConsumer{
-		ConsumeFn: func(ctx context.Context) (<-chan amqp.Delivery, error) {
-			ch := make(chan amqp.Delivery, 1)
-
-			if config, ok := washTable[request.Item]; ok {
-				finishTime := startTime.Add(time.Duration(config.cycleDurationInHours * float64(time.Hour)))
-				ch <- amqp.Delivery{Body: mustMarshalTimeEvent(t, finishTime)}
+	notifier := &fakeLaundererTimeEventRegistry{
+		RegisterFn: func(eventType timeEventType, ch chan<- time.Time) {
+			if eventType != timeEventHourChange {
+				t.Fatalf("Register() eventType = %q, want %q", eventType, timeEventHourChange)
 			}
-
-			close(ch)
-			return ch, nil
+			ch <- finishTime
 		},
 	}
 
 	service, err := NewLaundererService(
 		[]string{"Alice"},
 		clockClient,
-		consumer,
+		notifier,
 		stockRepo,
 		&stocker{stockRepo: stockRepo},
 	)
@@ -258,21 +329,40 @@ func laundererRun(t *testing.T, request domain.WashRequest, stockRepo *fakes.Fak
 
 	select {
 	case <-done:
-		validate(t, consumer, stockRepo)
+		validate(t, notifier, stockRepo)
 	case <-time.After(time.Second):
 		t.Fatal("Work did not return after cancellation")
 	}
 }
 
-func mustMarshalTimeEvent(t *testing.T, eventTime time.Time) []byte {
-	t.Helper()
+type fakeLaundererTimeEventRegistry struct {
+	RegisterFn   func(timeEventType, chan<- time.Time)
+	UnregisterFn func(timeEventType, chan<- time.Time)
 
-	payload, err := proto.Marshal(&dto.TimeEvent{
-		Time: timestamppb.New(eventTime),
-	})
-	if err != nil {
-		t.Fatalf("proto.Marshal() error = %v", err)
+	RegisterCallCount         int
+	UnregisterCallCount       int
+	LastRegisteredEventType   timeEventType
+	LastUnregisteredEventType timeEventType
+	LastRegisteredCh          chan<- time.Time
+	LastUnregisteredCh        chan<- time.Time
+}
+
+func (f *fakeLaundererTimeEventRegistry) Register(eventType timeEventType, ch chan<- time.Time) {
+	f.RegisterCallCount++
+	f.LastRegisteredEventType = eventType
+	f.LastRegisteredCh = ch
+
+	if f.RegisterFn != nil {
+		f.RegisterFn(eventType, ch)
 	}
+}
 
-	return payload
+func (f *fakeLaundererTimeEventRegistry) Unregister(eventType timeEventType, ch chan<- time.Time) {
+	f.UnregisterCallCount++
+	f.LastUnregisteredEventType = eventType
+	f.LastUnregisteredCh = ch
+
+	if f.UnregisterFn != nil {
+		f.UnregisterFn(eventType, ch)
+	}
 }

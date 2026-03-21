@@ -20,7 +20,7 @@ func TestNewManagerService(t *testing.T) {
 	t.Run("returns error when cleaning consumer is nil", func(t *testing.T) {
 		var cleaningConsumer *fakes.FakeMqConsumer
 
-		service, err := NewManagerService(cleaningConsumer, &fakes.FakeMqConsumer{}, make(chan domain.CleaningRequest), nil)
+		service, err := NewManagerService(cleaningConsumer, &fakeManagerTimeEventRegistry{}, make(chan domain.CleaningRequest), nil)
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
@@ -29,10 +29,10 @@ func TestNewManagerService(t *testing.T) {
 		}
 	})
 
-	t.Run("returns error when time consumer is nil", func(t *testing.T) {
-		var timeConsumer *fakes.FakeMqConsumer
+	t.Run("returns error when day change registry is nil", func(t *testing.T) {
+		var registry *fakeManagerTimeEventRegistry
 
-		service, err := NewManagerService(&fakes.FakeMqConsumer{}, timeConsumer, make(chan domain.CleaningRequest), nil)
+		service, err := NewManagerService(&fakes.FakeMqConsumer{}, registry, make(chan domain.CleaningRequest), nil)
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
@@ -42,7 +42,7 @@ func TestNewManagerService(t *testing.T) {
 	})
 
 	t.Run("returns error when cleaning channel is nil", func(t *testing.T) {
-		service, err := NewManagerService(&fakes.FakeMqConsumer{}, &fakes.FakeMqConsumer{}, nil, nil)
+		service, err := NewManagerService(&fakes.FakeMqConsumer{}, &fakeManagerTimeEventRegistry{}, nil, nil)
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
@@ -52,7 +52,7 @@ func TestNewManagerService(t *testing.T) {
 	})
 
 	t.Run("creates service when required dependencies are configured", func(t *testing.T) {
-		service, err := NewManagerService(&fakes.FakeMqConsumer{}, &fakes.FakeMqConsumer{}, make(chan domain.CleaningRequest), nil)
+		service, err := NewManagerService(&fakes.FakeMqConsumer{}, &fakeManagerTimeEventRegistry{}, make(chan domain.CleaningRequest), nil)
 		if err != nil {
 			t.Fatalf("NewManagerService() error = %v", err)
 		}
@@ -66,7 +66,7 @@ func TestManagerServiceStart(t *testing.T) {
 	t.Parallel()
 
 	t.Run("nacks invalid cleaning request without requeue", func(t *testing.T) {
-		validate := func(t *testing.T, cleaningAck *fakes.FakeAcknowledger, dayChangeAck *fakes.FakeAcknowledger, cleaningCh <-chan domain.CleaningRequest, stockerCh <-chan domain.RestockRequest) {
+		validate := func(t *testing.T, cleaningAck *fakes.FakeAcknowledger, dayRegistry *fakeManagerTimeEventRegistry, cleaningCh <-chan domain.CleaningRequest, stockerCh <-chan domain.RestockRequest) {
 			t.Helper()
 
 			if cleaningAck.NackCalls != 1 {
@@ -78,8 +78,17 @@ func TestManagerServiceStart(t *testing.T) {
 			if cleaningAck.AckCalls != 0 {
 				t.Fatalf("AckCalls = %d, want 0", cleaningAck.AckCalls)
 			}
-			if dayChangeAck.NackCalls != 0 {
-				t.Fatalf("dayChangeAck.NackCalls = %d, want 0", dayChangeAck.NackCalls)
+			if dayRegistry.RegisterCallCount != 1 {
+				t.Fatalf("RegisterCallCount = %d, want 1", dayRegistry.RegisterCallCount)
+			}
+			if dayRegistry.LastRegisteredEventType != timeEventDayChange {
+				t.Fatalf("LastRegisteredEventType = %q, want %q", dayRegistry.LastRegisteredEventType, timeEventDayChange)
+			}
+			if dayRegistry.UnregisterCallCount != 1 {
+				t.Fatalf("UnregisterCallCount = %d, want 1", dayRegistry.UnregisterCallCount)
+			}
+			if dayRegistry.LastUnregisteredEventType != timeEventDayChange {
+				t.Fatalf("LastUnregisteredEventType = %q, want %q", dayRegistry.LastUnregisteredEventType, timeEventDayChange)
 			}
 
 			select {
@@ -98,21 +107,24 @@ func TestManagerServiceStart(t *testing.T) {
 		managerStart(t, []byte("invalid-protobuf"), nil, nil, make(chan domain.RestockRequest, 1), validate)
 	})
 
-	t.Run("nacks day change event when stocker channel is not configured", func(t *testing.T) {
-		validate := func(t *testing.T, cleaningAck *fakes.FakeAcknowledger, dayChangeAck *fakes.FakeAcknowledger, cleaningCh <-chan domain.CleaningRequest, stockerCh <-chan domain.RestockRequest) {
+	t.Run("does not forward day change when stocker channel is not configured", func(t *testing.T) {
+		validate := func(t *testing.T, cleaningAck *fakes.FakeAcknowledger, dayRegistry *fakeManagerTimeEventRegistry, cleaningCh <-chan domain.CleaningRequest, stockerCh <-chan domain.RestockRequest) {
 			t.Helper()
 
-			if dayChangeAck.NackCalls != 1 {
-				t.Fatalf("NackCalls = %d, want 1", dayChangeAck.NackCalls)
-			}
-			if dayChangeAck.LastNackRequeue {
-				t.Fatal("expected nack requeue to be false")
-			}
-			if dayChangeAck.AckCalls != 0 {
-				t.Fatalf("AckCalls = %d, want 0", dayChangeAck.AckCalls)
-			}
 			if cleaningAck.NackCalls != 0 {
 				t.Fatalf("cleaningAck.NackCalls = %d, want 0", cleaningAck.NackCalls)
+			}
+			if dayRegistry.RegisterCallCount != 1 {
+				t.Fatalf("RegisterCallCount = %d, want 1", dayRegistry.RegisterCallCount)
+			}
+			if dayRegistry.LastRegisteredEventType != timeEventDayChange {
+				t.Fatalf("LastRegisteredEventType = %q, want %q", dayRegistry.LastRegisteredEventType, timeEventDayChange)
+			}
+			if dayRegistry.UnregisterCallCount != 1 {
+				t.Fatalf("UnregisterCallCount = %d, want 1", dayRegistry.UnregisterCallCount)
+			}
+			if dayRegistry.LastUnregisteredEventType != timeEventDayChange {
+				t.Fatalf("LastUnregisteredEventType = %q, want %q", dayRegistry.LastUnregisteredEventType, timeEventDayChange)
 			}
 
 			select {
@@ -121,18 +133,20 @@ func TestManagerServiceStart(t *testing.T) {
 			default:
 			}
 
-			select {
-			case got := <-stockerCh:
-				t.Fatalf("unexpected restock request: %+v", got)
-			default:
+			if stockerCh != nil {
+				select {
+				case got := <-stockerCh:
+					t.Fatalf("unexpected restock request: %+v", got)
+				default:
+				}
 			}
 		}
 
-		managerStart(t, nil, mustMarshalManagerCleaningRequest(t, &dto.CleaningRequest{}), nil, nil, validate)
+		managerStart(t, nil, &time.Time{}, nil, nil, validate)
 	})
 
 	t.Run("acks valid cleaning request and forwards it", func(t *testing.T) {
-		validate := func(t *testing.T, cleaningAck *fakes.FakeAcknowledger, dayChangeAck *fakes.FakeAcknowledger, cleaningCh <-chan domain.CleaningRequest, stockerCh <-chan domain.RestockRequest) {
+		validate := func(t *testing.T, cleaningAck *fakes.FakeAcknowledger, dayRegistry *fakeManagerTimeEventRegistry, cleaningCh <-chan domain.CleaningRequest, stockerCh <-chan domain.RestockRequest) {
 			t.Helper()
 
 			if cleaningAck.AckCalls != 1 {
@@ -147,11 +161,17 @@ func TestManagerServiceStart(t *testing.T) {
 			if cleaningAck.NackCalls != 0 {
 				t.Fatalf("NackCalls = %d, want 0", cleaningAck.NackCalls)
 			}
-			if dayChangeAck.AckCalls != 0 {
-				t.Fatalf("dayChangeAck.AckCalls = %d, want 0", dayChangeAck.AckCalls)
+			if dayRegistry.RegisterCallCount != 1 {
+				t.Fatalf("RegisterCallCount = %d, want 1", dayRegistry.RegisterCallCount)
 			}
-			if dayChangeAck.NackCalls != 0 {
-				t.Fatalf("dayChangeAck.NackCalls = %d, want 0", dayChangeAck.NackCalls)
+			if dayRegistry.LastRegisteredEventType != timeEventDayChange {
+				t.Fatalf("LastRegisteredEventType = %q, want %q", dayRegistry.LastRegisteredEventType, timeEventDayChange)
+			}
+			if dayRegistry.UnregisterCallCount != 1 {
+				t.Fatalf("UnregisterCallCount = %d, want 1", dayRegistry.UnregisterCallCount)
+			}
+			if dayRegistry.LastUnregisteredEventType != timeEventDayChange {
+				t.Fatalf("LastUnregisteredEventType = %q, want %q", dayRegistry.LastUnregisteredEventType, timeEventDayChange)
 			}
 
 			select {
@@ -177,27 +197,27 @@ func TestManagerServiceStart(t *testing.T) {
 		}), nil, nil, make(chan domain.RestockRequest, 1), validate)
 	})
 
-	t.Run("acks day change event and forwards restock request", func(t *testing.T) {
-		validate := func(t *testing.T, cleaningAck *fakes.FakeAcknowledger, dayChangeAck *fakes.FakeAcknowledger, cleaningCh <-chan domain.CleaningRequest, stockerCh <-chan domain.RestockRequest) {
+	t.Run("forwards restock request on day change event", func(t *testing.T) {
+		validate := func(t *testing.T, cleaningAck *fakes.FakeAcknowledger, dayRegistry *fakeManagerTimeEventRegistry, cleaningCh <-chan domain.CleaningRequest, stockerCh <-chan domain.RestockRequest) {
 			t.Helper()
 
-			if dayChangeAck.AckCalls != 1 {
-				t.Fatalf("AckCalls = %d, want 1", dayChangeAck.AckCalls)
-			}
-			if dayChangeAck.LastAckTag != 2 {
-				t.Fatalf("LastAckTag = %d, want 2", dayChangeAck.LastAckTag)
-			}
-			if dayChangeAck.LastAckMultiple {
-				t.Fatal("expected ack multiple to be false")
-			}
-			if dayChangeAck.NackCalls != 0 {
-				t.Fatalf("NackCalls = %d, want 0", dayChangeAck.NackCalls)
-			}
 			if cleaningAck.AckCalls != 0 {
 				t.Fatalf("cleaningAck.AckCalls = %d, want 0", cleaningAck.AckCalls)
 			}
 			if cleaningAck.NackCalls != 0 {
 				t.Fatalf("cleaningAck.NackCalls = %d, want 0", cleaningAck.NackCalls)
+			}
+			if dayRegistry.RegisterCallCount != 1 {
+				t.Fatalf("RegisterCallCount = %d, want 1", dayRegistry.RegisterCallCount)
+			}
+			if dayRegistry.LastRegisteredEventType != timeEventDayChange {
+				t.Fatalf("LastRegisteredEventType = %q, want %q", dayRegistry.LastRegisteredEventType, timeEventDayChange)
+			}
+			if dayRegistry.UnregisterCallCount != 1 {
+				t.Fatalf("UnregisterCallCount = %d, want 1", dayRegistry.UnregisterCallCount)
+			}
+			if dayRegistry.LastUnregisteredEventType != timeEventDayChange {
+				t.Fatalf("LastUnregisteredEventType = %q, want %q", dayRegistry.LastUnregisteredEventType, timeEventDayChange)
 			}
 
 			select {
@@ -227,14 +247,15 @@ func TestManagerServiceStart(t *testing.T) {
 			}
 		}
 
-		managerStart(t, nil, []byte("day-change"), nil, make(chan domain.RestockRequest, 1), validate)
+		now := time.Date(2026, 3, 21, 0, 0, 0, 0, time.UTC)
+		managerStart(t, nil, &now, nil, make(chan domain.RestockRequest, 1), validate)
 	})
 }
 
 func TestManagerServiceSelectItemsToRestock(t *testing.T) {
 	t.Parallel()
 
-	manager, err := NewManagerService(&fakes.FakeMqConsumer{}, &fakes.FakeMqConsumer{}, make(chan domain.CleaningRequest), nil)
+	manager, err := NewManagerService(&fakes.FakeMqConsumer{}, &fakeManagerTimeEventRegistry{}, make(chan domain.CleaningRequest), nil)
 	if err != nil {
 		t.Fatalf("NewManagerService() error = %v", err)
 	}
@@ -270,12 +291,11 @@ func mustMarshalManagerCleaningRequest(t *testing.T, request *dto.CleaningReques
 	return body
 }
 
-func managerStart(t *testing.T, cleaningBody []byte, dayChangeBody []byte, cleaningCh chan domain.CleaningRequest, stockerCh chan domain.RestockRequest,
-	validate func(t *testing.T, cleaningAck *fakes.FakeAcknowledger, dayChangeAck *fakes.FakeAcknowledger, cleaningCh <-chan domain.CleaningRequest, stockerCh <-chan domain.RestockRequest)) {
+func managerStart(t *testing.T, cleaningBody []byte, dayChangeTime *time.Time, cleaningCh chan domain.CleaningRequest, stockerCh chan domain.RestockRequest,
+	validate func(t *testing.T, cleaningAck *fakes.FakeAcknowledger, dayRegistry *fakeManagerTimeEventRegistry, cleaningCh <-chan domain.CleaningRequest, stockerCh <-chan domain.RestockRequest)) {
 	t.Helper()
 
 	cleaningAck := &fakes.FakeAcknowledger{}
-	dayChangeAck := &fakes.FakeAcknowledger{}
 
 	if cleaningCh == nil {
 		cleaningCh = make(chan domain.CleaningRequest, 1)
@@ -298,25 +318,9 @@ func managerStart(t *testing.T, cleaningBody []byte, dayChangeBody []byte, clean
 			return ch, nil
 		},
 	}
-	timeConsumer := &fakes.FakeMqConsumer{
-		ConsumeFn: func(ctx context.Context) (<-chan amqp.Delivery, error) {
-			if dayChangeBody == nil {
-				return nil, nil
-			}
 
-			ch := make(chan amqp.Delivery, 1)
-			ch <- amqp.Delivery{
-				Body:         dayChangeBody,
-				Acknowledger: dayChangeAck,
-				DeliveryTag:  2,
-				RoutingKey:   "day.change",
-			}
-
-			return ch, nil
-		},
-	}
-
-	manager, err := NewManagerService(cleaningConsumer, timeConsumer, cleaningCh, stockerCh)
+	dayRegistry := &fakeManagerTimeEventRegistry{}
+	manager, err := NewManagerService(cleaningConsumer, dayRegistry, cleaningCh, stockerCh)
 	if err != nil {
 		t.Fatalf("NewManagerService() error = %v", err)
 	}
@@ -330,14 +334,27 @@ func managerStart(t *testing.T, cleaningBody []byte, dayChangeBody []byte, clean
 		close(done)
 	}()
 
+	if dayChangeTime != nil {
+		waitFor(t, time.Second, func() bool {
+			return dayRegistry.LastRegisteredCh != nil
+		})
+		dayRegistry.LastRegisteredCh <- *dayChangeTime
+	}
+
 	waitFor(t, time.Second, func() bool {
-		return cleaningAck.AckCalls > 0 || cleaningAck.NackCalls > 0 || dayChangeAck.AckCalls > 0 || dayChangeAck.NackCalls > 0
+		if cleaningAck.AckCalls > 0 || cleaningAck.NackCalls > 0 {
+			return true
+		}
+		if dayChangeTime == nil || stockerCh == nil {
+			return dayRegistry.RegisterCallCount > 0
+		}
+		return len(stockerCh) > 0
 	})
 
 	cancel()
 	waitForDone(t, done)
 
-	validate(t, cleaningAck, dayChangeAck, cleaningCh, stockerCh)
+	validate(t, cleaningAck, dayRegistry, cleaningCh, stockerCh)
 }
 
 func waitFor(t *testing.T, timeout time.Duration, condition func() bool) {
@@ -362,4 +379,25 @@ func waitForDone(t *testing.T, done <-chan struct{}) {
 	case <-time.After(time.Second):
 		t.Fatal("manager did not return after cancellation")
 	}
+}
+
+type fakeManagerTimeEventRegistry struct {
+	RegisterCallCount         int
+	UnregisterCallCount       int
+	LastRegisteredEventType   timeEventType
+	LastUnregisteredEventType timeEventType
+	LastRegisteredCh          chan<- time.Time
+	LastUnregisteredCh        chan<- time.Time
+}
+
+func (f *fakeManagerTimeEventRegistry) Register(eventType timeEventType, ch chan<- time.Time) {
+	f.RegisterCallCount++
+	f.LastRegisteredEventType = eventType
+	f.LastRegisteredCh = ch
+}
+
+func (f *fakeManagerTimeEventRegistry) Unregister(eventType timeEventType, ch chan<- time.Time) {
+	f.UnregisterCallCount++
+	f.LastUnregisteredEventType = eventType
+	f.LastUnregisteredCh = ch
 }

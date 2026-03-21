@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"math/rand/v2"
+	"time"
 
 	"github.com/Kenji-Uema/staffSimulator/internal/app/validation"
 	"github.com/Kenji-Uema/staffSimulator/internal/domain"
@@ -14,20 +15,20 @@ import (
 
 type ManagerService struct {
 	cleaningEventConsumer port.MqConsumer
-	timeEventConsumer     port.MqConsumer
+	timeEventRegistry     timeEventRegistry
 	cleaningCh            chan<- domain.CleaningRequest
 	stockerCh             chan<- domain.RestockRequest
 }
 
 func NewManagerService(
 	cleaningEventConsumer port.MqConsumer,
-	timeEventConsumer port.MqConsumer,
+	timeEventRegistry timeEventRegistry,
 	cleaningCh chan<- domain.CleaningRequest,
 	stockerCh chan<- domain.RestockRequest) (*ManagerService, error) {
 
 	if err := validation.New().
 		NotZeroValue("cleaningEventConsumer", cleaningEventConsumer).
-		NotZeroValue("timeEventConsumer", timeEventConsumer).
+		NotZeroValue("timeEventRegistry", timeEventRegistry).
 		NotZeroValue("cleaningCh", cleaningCh).
 		Validate(); err != nil {
 		return nil, err
@@ -35,7 +36,7 @@ func NewManagerService(
 
 	return &ManagerService{
 		cleaningEventConsumer: cleaningEventConsumer,
-		timeEventConsumer:     timeEventConsumer,
+		timeEventRegistry:     timeEventRegistry,
 		cleaningCh:            cleaningCh,
 		stockerCh:             stockerCh,
 	}, nil
@@ -48,11 +49,9 @@ func (s *ManagerService) Start(ctx context.Context) {
 		return
 	}
 
-	dayChangeEvents, err := s.timeEventConsumer.Consume(ctx)
-	if err != nil {
-		slog.ErrorContext(ctx, "failed to consume time events", "error", err)
-		return
-	}
+	dayChangeCh := make(chan time.Time, 1)
+	s.timeEventRegistry.Register(timeEventDayChange, dayChangeCh)
+	defer s.timeEventRegistry.Unregister(timeEventDayChange, dayChangeCh)
 
 	for {
 		select {
@@ -60,7 +59,7 @@ func (s *ManagerService) Start(ctx context.Context) {
 			return
 		case cleaningDelivery, ok := <-cleaningRequests:
 			if !ok {
-				slog.Info("cleaning event consumer closed")
+				slog.InfoContext(ctx, "cleaning event consumer closed")
 				return
 			}
 
@@ -73,20 +72,13 @@ func (s *ManagerService) Start(ctx context.Context) {
 			s.cleaningCh <- cleaningRequest
 			s.ackDelivery(ctx, cleaningDelivery, "cleaningRequest")
 
-		case dayChangeEvent, ok := <-dayChangeEvents:
-			if !ok {
-				slog.Info("time event consumer closed")
-				return
-			}
-
+		case <-dayChangeCh:
 			if s.stockerCh == nil {
 				slog.ErrorContext(ctx, "stocker channel is not configured")
-				s.nackDelivery(ctx, dayChangeEvent, "dayChangeEvent")
 				continue
 			}
 
 			s.stockerCh <- domain.RestockRequest{ItemsName: s.selectItemsToRestock()}
-			s.ackDelivery(ctx, dayChangeEvent, "dayChangeEvent")
 		}
 	}
 }

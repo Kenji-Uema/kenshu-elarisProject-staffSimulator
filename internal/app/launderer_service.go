@@ -35,19 +35,19 @@ type LaundererService struct {
 }
 
 type launderer struct {
-	clock            port.Clock
-	hourChangeClient port.MqConsumer
-	stockRepo        port.StockRepo
-	stocker          immediateRestocker
+	clock      port.Clock
+	hourChange timeEventRegistry
+	stockRepo  port.StockRepo
+	stocker    immediateRestocker
 }
 
 func NewLaundererService(employeeNames []string,
-	clock port.Clock, hourChangeClient port.MqConsumer, stockRepo port.StockRepo, stocker immediateRestocker) (*LaundererService, error) {
+	clock port.Clock, hourChange timeEventRegistry, stockRepo port.StockRepo, stocker immediateRestocker) (*LaundererService, error) {
 
 	employeeCount := len(employeeNames)
 	if err := validation.New().
 		NotZeroValue("clock", clock).
-		NotZeroValue("hourChangeClient", hourChangeClient).
+		NotZeroValue("hourChange", hourChange).
 		NotZeroValue("stockRepo", stockRepo).
 		PositiveValue("employeeCount", employeeCount).Validate(); err != nil {
 		return nil, err
@@ -59,10 +59,10 @@ func NewLaundererService(employeeNames []string,
 	}
 
 	launderer := &launderer{
-		clock:            clock,
-		hourChangeClient: hourChangeClient,
-		stockRepo:        stockRepo,
-		stocker:          stocker,
+		clock:      clock,
+		hourChange: hourChange,
+		stockRepo:  stockRepo,
+		stocker:    stocker,
 	}
 
 	return &LaundererService{
@@ -72,6 +72,14 @@ func NewLaundererService(employeeNames []string,
 			work:          launderer.work,
 		},
 	}, nil
+}
+
+func (s *LaundererService) Work(ctx context.Context, requests <-chan domain.WashRequest) {
+	if s == nil {
+		return
+	}
+
+	s.employeeService.Work(ctx, requests)
 }
 
 func (l *launderer) work(ctx context.Context, employeeName string, request domain.WashRequest) {
@@ -146,26 +154,15 @@ func (l *launderer) wash(ctx context.Context, item string, employeeName string, 
 }
 
 func (l *launderer) washingCycle(ctx context.Context, startTime time.Time, cycleDurationInHours float64) (finishTime time.Time, err error) {
-	deliveries, err := l.hourChangeClient.Consume(ctx)
-	if err != nil {
-		return time.Time{}, err
-	}
+	hourChangeCh := make(chan time.Time, 1)
+	l.hourChange.Register(timeEventHourChange, hourChangeCh)
+	defer l.hourChange.Unregister(timeEventHourChange, hourChangeCh)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case delivery, ok := <-deliveries:
-			if !ok {
-				return time.Time{}, errors.New("delivery channel closed")
-			}
-
-			currentTime, err := unmarshalTimeEvent(ctx, delivery.Body)
-			if err != nil {
-				slog.ErrorContext(ctx, "failed to unmarshalCleaningRequest hour-change event", "error", err)
-				return time.Time{}, err
-			}
-
+		case currentTime := <-hourChangeCh:
 			if currentTime.Sub(startTime).Hours() >= cycleDurationInHours {
 				return currentTime, nil
 			}
