@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 )
 
@@ -157,7 +156,11 @@ func goBinaryPath() string {
 		return filepath.Join(goroot, "bin", "go")
 	}
 
-	return filepath.Join(runtime.GOROOT(), "bin", "go")
+	if goBin, err := exec.LookPath("go"); err == nil {
+		return goBin
+	}
+
+	return "go"
 }
 
 type prefixedWriter struct {
