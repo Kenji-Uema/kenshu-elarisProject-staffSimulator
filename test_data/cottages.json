@@ -3,7 +3,6 @@
     "Id": "86a7d3bb21169a393dd1db1b",
     "Name": "A",
     "View": "Lake",
-    "Cleaned": false,
     "Details": {
       "Description": "Lakefront cottage",
       "View": "Lake",
@@ -14,13 +13,16 @@
     "Photos": ["a-1.jpg", "a-2.jpg"],
     "PricePerNight": 220,
     "Bookings": ["b5fa4aefa370638801dbe2af"],
-    "CleaningStatus": "DIRTY"
+    "CleaningStatus": "fully_cleaned",
+    "Key": {
+      "Number": "staff-a-key",
+      "Holder": "cottage"
+    }
   },
   {
     "Id": "86a7d3bb21169a393dd1db1c",
     "Name": "B",
     "View": "Garden",
-    "Cleaned": true,
     "Details": {
       "Description": "Garden cottage",
       "View": "Garden",
@@ -31,13 +33,16 @@
     "Photos": ["b-1.jpg"],
     "PricePerNight": 180,
     "Bookings": [],
-    "CleaningStatus": "DAILY_CLEANED"
+    "CleaningStatus": "daily_cleaned",
+    "Key": {
+      "Number": "staff-b-key",
+      "Holder": "cottage"
+    }
   },
   {
     "Id": "86a7d3bb21169a393dd1db1d",
     "Name": "C",
     "View": "Forest",
-    "Cleaned": false,
     "Details": {
       "Description": "Forest retreat",
       "View": "Forest",
@@ -48,6 +53,10 @@
     "Photos": ["c-1.jpg"],
     "PricePerNight": 195,
     "Bookings": ["40583ce2a1791c22e68e957c"],
-    "CleaningStatus": "PREPARED_FOR_SLEEP"
+    "CleaningStatus": "prepared_for_sleep",
+    "Key": {
+      "Number": "staff-c-key",
+      "Holder": "cottage"
+    }
   }
 ]

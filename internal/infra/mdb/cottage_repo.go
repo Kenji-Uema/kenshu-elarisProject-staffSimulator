@@ -23,6 +23,9 @@ func (r *cottageRepo) UpdateCleaningStatus(ctx context.Context, cottageName stri
 	if err := validation.New().NotBlank("cottageName", cottageName).NotBlank("cleaningStatus", cleaningStatus).Validate(); err != nil {
 		return err
 	}
+	if err := validation.New().ValidCleaningStatus("cleaningStatus", cleaningStatus).Validate(); err != nil {
+		return err
+	}
 
 	filter := bson.M{"name": cottageName}
 	update := bson.M{"$set": bson.M{"cleaning_status": cleaningStatus}}

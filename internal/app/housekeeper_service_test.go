@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Kenji-Uema/staffSimulator/internal/domain"
+	"github.com/Kenji-Uema/staffSimulator/internal/domain/documents"
 	"github.com/Kenji-Uema/staffSimulator/internal/domain/errors/dbErrors"
 	"github.com/Kenji-Uema/staffSimulator/internal/infra/fakes"
 )
@@ -84,8 +85,8 @@ func TestHousekeeperServiceRun(t *testing.T) {
 			if cottageRepo.LastUpdateCleaningStatusRoom != "A" {
 				t.Fatalf("LastUpdateCleaningStatusRoom = %q, want %q", cottageRepo.LastUpdateCleaningStatusRoom, "A")
 			}
-			if cottageRepo.LastCleaningStatus != "PREPARED_FOR_GUEST" {
-				t.Fatalf("LastCleaningStatus = %q, want %q", cottageRepo.LastCleaningStatus, "PREPARED_FOR_GUEST")
+			if cottageRepo.LastCleaningStatus != string(documents.CleaningStatusPreparedForGuest) {
+				t.Fatalf("LastCleaningStatus = %q, want %q", cottageRepo.LastCleaningStatus, documents.CleaningStatusPreparedForGuest)
 			}
 			if stockRepo.ConsumeItemCallCount != 2 {
 				t.Fatalf("ConsumeItemCallCount = %d, want 2", stockRepo.ConsumeItemCallCount)
@@ -117,8 +118,8 @@ func TestHousekeeperServiceRun(t *testing.T) {
 			if cottageRepo.LastUpdateCleaningStatusRoom != "A" {
 				t.Fatalf("LastUpdateCleaningStatusRoom = %q, want %q", cottageRepo.LastUpdateCleaningStatusRoom, "A")
 			}
-			if cottageRepo.LastCleaningStatus != "DAILY_CLEANED" {
-				t.Fatalf("LastCleaningStatus = %q, want %q", cottageRepo.LastCleaningStatus, "DAILY_CLEANED")
+			if cottageRepo.LastCleaningStatus != string(documents.CleaningStatusDailyCleaned) {
+				t.Fatalf("LastCleaningStatus = %q, want %q", cottageRepo.LastCleaningStatus, documents.CleaningStatusDailyCleaned)
 			}
 			if stockRepo.ConsumeItemCallCount != 1 {
 				t.Fatalf("ConsumeItemCallCount = %d, want 1", stockRepo.ConsumeItemCallCount)
@@ -154,8 +155,8 @@ func TestHousekeeperServiceRun(t *testing.T) {
 			if cottageRepo.LastUpdateCleaningStatusRoom != "A" {
 				t.Fatalf("LastUpdateCleaningStatusRoom = %q, want %q", cottageRepo.LastUpdateCleaningStatusRoom, "A")
 			}
-			if cottageRepo.LastCleaningStatus != "FULLY_CLEANED" {
-				t.Fatalf("LastCleaningStatus = %q, want %q", cottageRepo.LastCleaningStatus, "FULLY_CLEANED")
+			if cottageRepo.LastCleaningStatus != string(documents.CleaningStatusFullyCleaned) {
+				t.Fatalf("LastCleaningStatus = %q, want %q", cottageRepo.LastCleaningStatus, documents.CleaningStatusFullyCleaned)
 			}
 			if stockRepo.ConsumeItemCallCount != 1 {
 				t.Fatalf("ConsumeItemCallCount = %d, want 1", stockRepo.ConsumeItemCallCount)
@@ -196,8 +197,8 @@ func TestHousekeeperServiceRun(t *testing.T) {
 			if cottageRepo.LastUpdateCleaningStatusRoom != "A" {
 				t.Fatalf("LastUpdateCleaningStatusRoom = %q, want %q", cottageRepo.LastUpdateCleaningStatusRoom, "A")
 			}
-			if cottageRepo.LastCleaningStatus != "PREPARED_FOR_SLEEP" {
-				t.Fatalf("LastCleaningStatus = %q, want %q", cottageRepo.LastCleaningStatus, "PREPARED_FOR_SLEEP")
+			if cottageRepo.LastCleaningStatus != string(documents.CleaningStatusPreparedForSleep) {
+				t.Fatalf("LastCleaningStatus = %q, want %q", cottageRepo.LastCleaningStatus, documents.CleaningStatusPreparedForSleep)
 			}
 			if stockRepo.ConsumeItemCallCount != 2 {
 				t.Fatalf("ConsumeItemCallCount = %d, want 2", stockRepo.ConsumeItemCallCount)

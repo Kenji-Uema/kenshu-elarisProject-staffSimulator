@@ -24,7 +24,7 @@ const (
 )
 
 type scenarioExpectation struct {
-	cleaningStatus string
+	cleaningStatus documents.CleaningStatus
 	cleaningItem   int
 	soap           int
 	wineBottle     int
@@ -44,7 +44,7 @@ var _ = Describe("Full application integration", Ordered, func() {
 
 		Eventually(func(g Gomega) {
 			assertScenarioState(g, scenarioExpectation{
-				cleaningStatus: "PREPARED_FOR_GUEST",
+				cleaningStatus: documents.CleaningStatusPreparedForGuest,
 				cleaningItem:   100,
 				soap:           100,
 				wineBottle:     99,
@@ -60,7 +60,7 @@ var _ = Describe("Full application integration", Ordered, func() {
 
 		Eventually(func(g Gomega) {
 			assertScenarioState(g, scenarioExpectation{
-				cleaningStatus: "DAILY_CLEANED",
+				cleaningStatus: documents.CleaningStatusDailyCleaned,
 				cleaningItem:   95,
 				soap:           90,
 				wineBottle:     100,
@@ -76,7 +76,7 @@ var _ = Describe("Full application integration", Ordered, func() {
 
 		Eventually(func(g Gomega) {
 			assertScenarioState(g, scenarioExpectation{
-				cleaningStatus: "FULLY_CLEANED",
+				cleaningStatus: documents.CleaningStatusFullyCleaned,
 				cleaningItem:   90,
 				soap:           70,
 				wineBottle:     100,
@@ -91,7 +91,7 @@ var _ = Describe("Full application integration", Ordered, func() {
 
 		Eventually(func(g Gomega) {
 			assertScenarioState(g, scenarioExpectation{
-				cleaningStatus: "PREPARED_FOR_SLEEP",
+				cleaningStatus: documents.CleaningStatusPreparedForSleep,
 				cleaningItem:   100,
 				soap:           100,
 				wineBottle:     100,
@@ -108,7 +108,7 @@ var _ = Describe("Full application integration", Ordered, func() {
 
 		Eventually(func(g Gomega) {
 			assertScenarioState(g, scenarioExpectation{
-				cleaningStatus: "DAILY_CLEANED",
+				cleaningStatus: documents.CleaningStatusDailyCleaned,
 				cleaningItem:   95,
 				soap:           40,
 				wineBottle:     100,
@@ -126,7 +126,7 @@ var _ = Describe("Full application integration", Ordered, func() {
 			var cottage documents.Cottage
 			err := suiteCottageCollection.FindOne(context.Background(), bson.M{"name": "A"}).Decode(&cottage)
 			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(cottage.CleaningStatus).To(Equal("DIRTY"))
+			g.Expect(cottage.CleaningStatus).To(Equal(documents.CleaningStatusFullyCleaned))
 
 			var stock documents.Stock
 			err = suiteStockCollection.FindOne(context.Background(), bson.M{}).Decode(&stock)

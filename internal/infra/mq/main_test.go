@@ -20,6 +20,12 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	cleanup, err := prepareTestcontainersTempDir()
+	if err != nil {
+		panic(fmt.Sprintf("failed to prepare temp dir: %v", err))
+	}
+	defer cleanup()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
@@ -45,6 +51,39 @@ func TestMain(m *testing.M) {
 	}
 
 	os.Exit(code)
+}
+
+func prepareTestcontainersTempDir() (func(), error) {
+	tempDir, err := os.MkdirTemp("", "testcontainers-tmp-")
+	if err != nil {
+		return nil, err
+	}
+
+	previousValues := map[string]*string{}
+	for _, key := range []string{"TMPDIR", "TMP", "TEMP"} {
+		if value, ok := os.LookupEnv(key); ok {
+			copied := value
+			previousValues[key] = &copied
+		} else {
+			previousValues[key] = nil
+		}
+
+		if err := os.Setenv(key, tempDir); err != nil {
+			_ = os.RemoveAll(tempDir)
+			return nil, err
+		}
+	}
+
+	return func() {
+		for key, value := range previousValues {
+			if value == nil {
+				_ = os.Unsetenv(key)
+				continue
+			}
+			_ = os.Setenv(key, *value)
+		}
+		_ = os.RemoveAll(tempDir)
+	}, nil
 }
 
 func runRabbitMQContainer(ctx context.Context) (container *rabbitmq.RabbitMQContainer, cfg config.RabbitMqConfig, err error) {

@@ -41,39 +41,19 @@ var _ = BeforeSuite(func() {
 	DeferCleanup(cancel)
 
 	suiteMongoHost, suiteRabbitHost, suiteRabbitPort = helpers.StartContainers(ctx)
-	helpers.SeedMongoFromFixtures(
-		t,
-		suiteMongoHost,
-		"test_db",
-		"/home/kenjiuema/Documents/projects/staffSimulator/test_data/cottages.json",
-		"/home/kenjiuema/Documents/projects/staffSimulator/test_data/stocks.json",
-	)
-	suiteClockHost, suiteClockPort = helpers.StartClockEmulator(t)
-
-	suiteAppPort = helpers.FreeTCPPort(t)
 	suiteDBName = "test_db"
 	suiteCleaningEx = "ex.cleaning.request"
 	suiteDayEx = "ex.day_change.event"
 	suiteHourEx = "ex.hour_change.event"
-	suiteStopMain, suiteRunErrCh = helpers.ApplicationStart(
-		t,
-		helpers.ApplicationConfig{
-			AppPort:          suiteAppPort,
-			ClockHost:        suiteClockHost,
-			ClockPort:        fmt.Sprintf("%d", suiteClockPort),
-			MongoURI:         fmt.Sprintf("mongodb://test_user:test_pass@%s", suiteMongoHost),
-			MongoDatabase:    suiteDBName,
-			RabbitHost:       suiteRabbitHost,
-			RabbitPort:       suiteRabbitPort,
-			CleaningExchange: suiteCleaningEx,
-			DayExchange:      suiteDayEx,
-			HourExchange:     suiteHourEx,
-		},
-	)
 
-	if err := waitForHTTP200OrExit(suiteAppPort, suiteRunErrCh, 30*time.Second); err != nil {
-		Skip(fmt.Sprintf("skipping integration test: %v", err))
-	}
+	helpers.SeedMongoFromFixtures(
+		t,
+		suiteMongoHost,
+		suiteDBName,
+		"/home/kenjiuema/Documents/projects/staffSimulator/test_data/cottages.json",
+		"/home/kenjiuema/Documents/projects/staffSimulator/test_data/stocks.json",
+	)
+	suiteClockHost, suiteClockPort = helpers.StartClockEmulator(t)
 
 	var err error
 	suiteRawMongoClient, err = mongo.Connect(options.Client().ApplyURI(fmt.Sprintf("mongodb://test_user:test_pass@%s", suiteMongoHost)))
@@ -104,6 +84,27 @@ var _ = BeforeSuite(func() {
 	Expect(suiteRawRabbitChannel.ExchangeDeclare(suiteCleaningEx, "direct", false, true, false, false, nil)).To(Succeed())
 	Expect(suiteRawRabbitChannel.ExchangeDeclare(suiteDayEx, "direct", false, true, false, false, nil)).To(Succeed())
 	Expect(suiteRawRabbitChannel.ExchangeDeclare(suiteHourEx, "direct", false, true, false, false, nil)).To(Succeed())
+
+	suiteAppPort = helpers.FreeTCPPort(t)
+	suiteStopMain, suiteRunErrCh = helpers.ApplicationStart(
+		t,
+		helpers.ApplicationConfig{
+			AppPort:          suiteAppPort,
+			ClockHost:        suiteClockHost,
+			ClockPort:        fmt.Sprintf("%d", suiteClockPort),
+			MongoURI:         fmt.Sprintf("mongodb://test_user:test_pass@%s", suiteMongoHost),
+			MongoDatabase:    suiteDBName,
+			RabbitHost:       suiteRabbitHost,
+			RabbitPort:       suiteRabbitPort,
+			CleaningExchange: suiteCleaningEx,
+			DayExchange:      suiteDayEx,
+			HourExchange:     suiteHourEx,
+		},
+	)
+
+	if err := waitForHTTP200OrExit(suiteAppPort, suiteRunErrCh, 30*time.Second); err != nil {
+		Fail(fmt.Sprintf("integration app failed to become ready: %v", err))
+	}
 
 	suiteReady = true
 })

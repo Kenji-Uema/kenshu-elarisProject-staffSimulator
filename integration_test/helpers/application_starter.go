@@ -1,10 +1,15 @@
 package helpers
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
 )
 
 type ApplicationConfig struct {
@@ -25,10 +30,31 @@ func ApplicationStart(t TestReporter, cfg ApplicationConfig) (stop func(), runEr
 
 	runCtx, cancelRun := context.WithCancel(context.Background())
 	runErrCh := make(chan error, 1)
+	var output bytes.Buffer
+	binDir, err := os.MkdirTemp("", "staff-simulator-integration-*")
+	if err != nil {
+		t.Fatalf("create temp dir for integration app: %v", err)
+	}
+	binPath := filepath.Join(binDir, "staff-simulator")
+	goBin := goBinaryPath()
 
-	cmd := exec.CommandContext(runCtx, "go", "run", "./internal")
+	buildCmd := exec.Command(goBin, "build", "-o", binPath, "./internal")
+	buildCmd.Dir = "/home/kenjiuema/Documents/projects/staffSimulator"
+	buildCmd.Env = os.Environ()
+	buildCmd.Stdout = io.MultiWriter(&output, newPrefixedWriter(os.Stdout, "[build] "))
+	buildCmd.Stderr = io.MultiWriter(&output, newPrefixedWriter(os.Stderr, "[build] "))
+	if err := buildCmd.Run(); err != nil {
+		_ = os.RemoveAll(binDir)
+		t.Fatalf("build integration app: %v\napplication output:\n%s", err, strings.TrimSpace(output.String()))
+	}
+
+	output.Reset()
+
+	cmd := exec.CommandContext(runCtx, binPath)
 	cmd.Dir = "/home/kenjiuema/Documents/projects/staffSimulator"
 	cmd.Env = envWithOverrides(os.Environ(), applicationEnv(cfg))
+	cmd.Stdout = io.MultiWriter(&output, newPrefixedWriter(os.Stdout, "[app] "))
+	cmd.Stderr = io.MultiWriter(&output, newPrefixedWriter(os.Stderr, "[app] "))
 
 	go func() {
 		err := cmd.Run()
@@ -36,11 +62,16 @@ func ApplicationStart(t TestReporter, cfg ApplicationConfig) (stop func(), runEr
 			runErrCh <- nil
 			return
 		}
+		if err != nil {
+			runErrCh <- fmt.Errorf("%w\napplication output:\n%s", err, strings.TrimSpace(output.String()))
+			return
+		}
 		runErrCh <- err
 	}()
 
 	stop = func() {
 		cancelRun()
+		_ = os.RemoveAll(binDir)
 	}
 
 	return stop, runErrCh
@@ -119,4 +150,58 @@ func stringsCut(entry string) (string, string, bool) {
 		}
 	}
 	return "", "", false
+}
+
+func goBinaryPath() string {
+	if goroot := os.Getenv("GOROOT"); goroot != "" {
+		return filepath.Join(goroot, "bin", "go")
+	}
+
+	return filepath.Join(runtime.GOROOT(), "bin", "go")
+}
+
+type prefixedWriter struct {
+	writer   io.Writer
+	prefix   string
+	atLineUp bool
+}
+
+func newPrefixedWriter(writer io.Writer, prefix string) *prefixedWriter {
+	return &prefixedWriter{
+		writer:   writer,
+		prefix:   prefix,
+		atLineUp: true,
+	}
+}
+
+func (w *prefixedWriter) Write(p []byte) (int, error) {
+	written := 0
+
+	for len(p) > 0 {
+		if w.atLineUp {
+			if _, err := io.WriteString(w.writer, w.prefix); err != nil {
+				return written, err
+			}
+			w.atLineUp = false
+		}
+
+		newlineIdx := bytes.IndexByte(p, '\n')
+		if newlineIdx == -1 {
+			n, err := w.writer.Write(p)
+			written += n
+			return written, err
+		}
+
+		chunk := p[:newlineIdx+1]
+		n, err := w.writer.Write(chunk)
+		written += n
+		if err != nil {
+			return written, err
+		}
+
+		w.atLineUp = true
+		p = p[newlineIdx+1:]
+	}
+
+	return written, nil
 }
