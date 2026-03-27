@@ -21,7 +21,10 @@ func StartHTTPServer(appCfg config.AppConfig, rabbitMqClient *mq.RabbitMqConnect
 	server := &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", appCfg.Server.Host, appCfg.Server.Port),
 		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
+		ReadHeaderTimeout: time.Duration(appCfg.Server.ReadHeaderTimeoutInSeconds) * time.Second,
+		ReadTimeout:       time.Duration(appCfg.Server.ReadTimeoutInSeconds) * time.Second,
+		WriteTimeout:      time.Duration(appCfg.Server.WriteTimeoutInSeconds) * time.Second,
+		IdleTimeout:       time.Duration(appCfg.Server.IdleTimeoutInSeconds) * time.Second,
 	}
 
 	go func() {
