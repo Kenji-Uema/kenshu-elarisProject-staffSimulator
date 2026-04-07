@@ -5,4 +5,4 @@ generate:
 	npx buf generate
 
 docker-build:
-	 docker build --build-arg SERVICE_NAME=staff-simulator --build-arg VERSION=latest -t staff-simulator:latest .
+	 docker build --build-arg SERVICE_NAME=staff-simulator --build-arg VERSION=1.0.1 -t staff-simulator:1.0.1 .

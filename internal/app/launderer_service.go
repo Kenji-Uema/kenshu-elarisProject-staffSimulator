@@ -11,7 +11,9 @@ import (
 	"github.com/Kenji-Uema/staffSimulator/internal/domain"
 	"github.com/Kenji-Uema/staffSimulator/internal/domain/documents"
 	"github.com/Kenji-Uema/staffSimulator/internal/domain/errors/dbErrors"
+	"github.com/Kenji-Uema/staffSimulator/internal/infra/telemetry"
 	"github.com/Kenji-Uema/staffSimulator/internal/port"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type washConfig struct {
@@ -83,13 +85,21 @@ func (s *LaundererService) Work(ctx context.Context, requests <-chan domain.Wash
 }
 
 func (l *launderer) work(ctx context.Context, employeeName string, request domain.WashRequest) {
-	startTime, err := l.clock.Now(ctx)
+	spanCtx, span := telemetry.StartSpan(ctx, "staff.launderer.wash_request",
+		telemetry.RequestAttributes(employeeName),
+		attribute.String("staff.room_name", request.RoomName),
+		attribute.String("staff.laundry.item", request.Item),
+	)
+	defer span.End()
+
+	startTime, err := l.clock.Now(spanCtx)
 	if err != nil {
-		slog.ErrorContext(ctx, "failed to get current time", "error", err)
+		telemetry.RecordSpanError(span, err)
+		slog.ErrorContext(spanCtx, "failed to get current time", "error", err)
 		return
 	}
 
-	slog.InfoContext(ctx,
+	slog.InfoContext(spanCtx,
 		"launderer started to workFn on washing request",
 		"employeeName", employeeName,
 		"roomName", request.RoomName,
@@ -97,18 +107,19 @@ func (l *launderer) work(ctx context.Context, employeeName string, request domai
 		"startTime", startTime,
 	)
 
-	err = l.wash(ctx, request.Item, employeeName, request.RoomName, startTime)
+	err = l.wash(spanCtx, request.Item, employeeName, request.RoomName, startTime)
 	if err == nil {
 		return
 	}
 
 	var stockErr *dbErrors.StockInsufficientQuantityErr
 	if !errors.As(err, &stockErr) {
-		slog.ErrorContext(ctx, "failed to wash item", "item", request.Item, "employeeName", employeeName, "roomName", request.RoomName, "error", err)
+		telemetry.RecordSpanError(span, err)
+		slog.ErrorContext(spanCtx, "failed to wash item", "item", request.Item, "employeeName", employeeName, "roomName", request.RoomName, "error", err)
 		return
 	}
 
-	slog.WarnContext(ctx,
+	slog.WarnContext(spanCtx,
 		"insufficient stock to wash item, requesting restock",
 		"employeeName", employeeName,
 		"roomName", request.RoomName,
@@ -116,30 +127,42 @@ func (l *launderer) work(ctx context.Context, employeeName string, request domai
 		"requestedQuantity", stockErr.Quantity,
 	)
 
-	if restockErr := l.stocker.ImmediateRestock(ctx, stockErr.ItemName); restockErr != nil {
-		slog.ErrorContext(ctx, "failed to restock item", "employeeName", employeeName, "roomName", request.RoomName, "error", restockErr)
+	if restockErr := l.stocker.ImmediateRestock(spanCtx, stockErr.ItemName); restockErr != nil {
+		telemetry.RecordSpanError(span, restockErr)
+		slog.ErrorContext(spanCtx, "failed to restock item", "employeeName", employeeName, "roomName", request.RoomName, "error", restockErr)
 		return
 	}
 
-	if err := l.wash(ctx, request.Item, employeeName, request.RoomName, startTime); err != nil {
-		slog.ErrorContext(ctx, "failed to wash item after restock", "employeeName", employeeName, "roomName", request.RoomName, "error", err)
+	if err := l.wash(spanCtx, request.Item, employeeName, request.RoomName, startTime); err != nil {
+		telemetry.RecordSpanError(span, err)
+		slog.ErrorContext(spanCtx, "failed to wash item after restock", "employeeName", employeeName, "roomName", request.RoomName, "error", err)
 	}
 }
 
 func (l *launderer) wash(ctx context.Context, item string, employeeName string, roomName string, startTime *time.Time) error {
+	spanCtx, span := telemetry.StartSpan(ctx, "staff.launderer.wash",
+		telemetry.RequestAttributes(employeeName),
+		attribute.String("staff.room_name", roomName),
+		attribute.String("staff.laundry.item", item),
+	)
+	defer span.End()
+
 	washConfig, ok := washTable[item]
 	if !ok {
-		return fmt.Errorf("unsupported wash item: %s", item)
+		err := fmt.Errorf("unsupported wash item: %s", item)
+		telemetry.RecordSpanError(span, err)
+		return err
 	}
 
-	err := l.stockRepo.ConsumeItem(ctx, documents.Soap, washConfig.soap)
+	err := l.stockRepo.ConsumeItem(spanCtx, documents.Soap, washConfig.soap)
 	if err == nil {
-		finishTime, err := l.washingCycle(ctx, *startTime, washConfig.cycleDurationInHours)
+		finishTime, err := l.washingCycle(spanCtx, *startTime, washConfig.cycleDurationInHours, employeeName, roomName, item)
 		if err != nil {
+			telemetry.RecordSpanError(span, err)
 			return err
 		}
 
-		slog.InfoContext(ctx, "launderer is done",
+		slog.InfoContext(spanCtx, "launderer is done",
 			"employeeName", employeeName,
 			"roomName", roomName,
 			"washing", item,
@@ -150,17 +173,26 @@ func (l *launderer) wash(ctx context.Context, item string, employeeName string, 
 		return nil
 	}
 
+	telemetry.RecordSpanError(span, err)
 	return err
 }
 
-func (l *launderer) washingCycle(ctx context.Context, startTime time.Time, cycleDurationInHours float64) (finishTime time.Time, err error) {
+func (l *launderer) washingCycle(ctx context.Context, startTime time.Time, cycleDurationInHours float64, employeeName string, roomName string, item string) (finishTime time.Time, err error) {
+	spanCtx, span := telemetry.StartSpan(ctx, "staff.launderer.washing_cycle",
+		telemetry.RequestAttributes(employeeName),
+		attribute.String("staff.room_name", roomName),
+		attribute.String("staff.laundry.item", item),
+		attribute.Float64("staff.laundry.cycle_hours", cycleDurationInHours),
+	)
+	defer span.End()
+
 	hourChangeCh := make(chan time.Time, 1)
 	l.hourChange.Register(timeEventHourChange, hourChangeCh)
 	defer l.hourChange.Unregister(timeEventHourChange, hourChangeCh)
 
 	for {
 		select {
-		case <-ctx.Done():
+		case <-spanCtx.Done():
 			return
 		case currentTime := <-hourChangeCh:
 			if currentTime.Sub(startTime).Hours() >= cycleDurationInHours {

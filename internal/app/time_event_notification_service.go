@@ -8,8 +8,10 @@ import (
 
 	"github.com/Kenji-Uema/staffSimulator/internal/app/validation"
 	"github.com/Kenji-Uema/staffSimulator/internal/domain"
+	"github.com/Kenji-Uema/staffSimulator/internal/infra/telemetry"
 	"github.com/Kenji-Uema/staffSimulator/internal/port"
 	amqp "github.com/rabbitmq/amqp091-go"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type timeEventType string
@@ -71,30 +73,38 @@ func (s *TimeEventNotificationService) Start(ctx context.Context) {
 				return
 			}
 
-			currentTime, err := unmarshalTimeEvent(ctx, hourChange.Body)
+			deliveryCtx, span := telemetry.StartConsumerSpan(ctx, hourChange, "hour.change")
+			currentTime, err := unmarshalTimeEvent(deliveryCtx, hourChange.Body)
 			if err != nil {
-				slog.ErrorContext(ctx, "failed to unmarshal hour change event", "error", err)
-				s.nackDelivery(ctx, hourChange, "hourChangeEvent")
+				telemetry.RecordDeliveryError(span, err)
+				slog.ErrorContext(deliveryCtx, "failed to unmarshal hour change event", "error", err)
+				s.nackDelivery(deliveryCtx, hourChange, "hourChangeEvent")
+				span.End()
 				continue
 			}
 
-			s.ackDelivery(ctx, hourChange, "hourChangeEvent")
-			s.notifyHourChange(ctx, currentTime)
+			s.ackDelivery(deliveryCtx, hourChange, "hourChangeEvent")
+			s.notifyHourChange(deliveryCtx, currentTime)
+			span.End()
 		case dayChange, ok := <-dayChangeDeliveries:
 			if !ok {
 				slog.InfoContext(ctx, "day change consumer closed")
 				return
 			}
 
-			currentTime, err := unmarshalTimeEvent(ctx, dayChange.Body)
+			deliveryCtx, span := telemetry.StartConsumerSpan(ctx, dayChange, "day.change")
+			currentTime, err := unmarshalTimeEvent(deliveryCtx, dayChange.Body)
 			if err != nil {
-				slog.ErrorContext(ctx, "failed to unmarshal day change event", "error", err)
-				s.nackDelivery(ctx, dayChange, "dayChangeEvent")
+				telemetry.RecordDeliveryError(span, err)
+				slog.ErrorContext(deliveryCtx, "failed to unmarshal day change event", "error", err)
+				s.nackDelivery(deliveryCtx, dayChange, "dayChangeEvent")
+				span.End()
 				continue
 			}
 
-			s.ackDelivery(ctx, dayChange, "dayChangeEvent")
-			s.notifyDayChange(ctx, currentTime)
+			s.ackDelivery(deliveryCtx, dayChange, "dayChangeEvent")
+			s.notifyDayChange(deliveryCtx, currentTime)
+			span.End()
 		}
 	}
 }
@@ -150,12 +160,18 @@ func (s *TimeEventNotificationService) notifyDayChange(ctx context.Context, curr
 }
 
 func (s *TimeEventNotificationService) notify(ctx context.Context, currentTime time.Time, channels []chan<- time.Time, eventName string) {
+	notifyCtx, span := telemetry.StartSpan(ctx, "staff.time_event.notify",
+		attribute.String("staff.time_event.name", eventName),
+		attribute.Int("staff.time_event.subscriber_count", len(channels)),
+	)
+	defer span.End()
+
 	for _, ch := range channels {
 		select {
 		case ch <- currentTime:
-			slog.DebugContext(ctx, "published "+eventName+" event to subscriber", "currentTime", currentTime)
+			slog.DebugContext(notifyCtx, "published "+eventName+" event to subscriber", "currentTime", currentTime)
 		default:
-			slog.WarnContext(ctx, "skipped "+eventName+" event for busy subscriber", "currentTime", currentTime)
+			slog.WarnContext(notifyCtx, "skipped "+eventName+" event for busy subscriber", "currentTime", currentTime)
 		}
 	}
 }

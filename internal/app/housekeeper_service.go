@@ -9,7 +9,9 @@ import (
 	"github.com/Kenji-Uema/staffSimulator/internal/domain"
 	"github.com/Kenji-Uema/staffSimulator/internal/domain/documents"
 	"github.com/Kenji-Uema/staffSimulator/internal/domain/errors/dbErrors"
+	"github.com/Kenji-Uema/staffSimulator/internal/infra/telemetry"
 	"github.com/Kenji-Uema/staffSimulator/internal/port"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type HousekeeperService struct {
@@ -62,8 +64,16 @@ func NewHousekeeperService(employeeNames []string, clock port.Clock, cottageRepo
 }
 
 func (h *housekeeper) work(ctx context.Context, employeeName string, request domain.CleaningRequest) {
+	ctx, span := telemetry.StartSpan(ctx, "staff.housekeeper.cleaning_request",
+		telemetry.RequestAttributes(employeeName),
+		attribute.String("staff.room_name", request.RoomName),
+		attribute.String("staff.cleaning.request_type", request.RequestType),
+	)
+	defer span.End()
+
 	startTime, err := h.clock.Now(ctx)
 	if err != nil {
+		telemetry.RecordSpanError(span, err)
 		slog.ErrorContext(ctx, "failed to get current time", "error", err)
 		return
 	}
@@ -108,6 +118,7 @@ func (h *housekeeper) work(ctx context.Context, employeeName string, request dom
 
 	finishTime, err := h.clock.Now(ctx)
 	if err != nil {
+		telemetry.RecordSpanError(span, err)
 		slog.ErrorContext(ctx, "failed to get current time", "error", err)
 		return
 	}
@@ -123,7 +134,14 @@ func (h *housekeeper) work(ctx context.Context, employeeName string, request dom
 }
 
 func (h *housekeeper) action(ctx context.Context, action string, employeeName string, roomName string) {
-	slog.InfoContext(ctx,
+	spanCtx, span := telemetry.StartSpan(ctx, "staff.housekeeper.action",
+		telemetry.RequestAttributes(employeeName),
+		attribute.String("staff.room_name", roomName),
+		attribute.String("staff.action", action),
+	)
+	defer span.End()
+
+	slog.InfoContext(spanCtx,
 		action,
 		"employeeName", employeeName,
 		"roomName", roomName,
@@ -132,18 +150,28 @@ func (h *housekeeper) action(ctx context.Context, action string, employeeName st
 
 func (h *housekeeper) actionConsumeItemRetry(ctx context.Context, action string, item string, quantity int,
 	employeeName string, roomName string) {
-	err := h.actionConsumeItem(ctx, action, item, quantity, employeeName, roomName)
+	spanCtx, span := telemetry.StartSpan(ctx, "staff.housekeeper.consume_item",
+		telemetry.RequestAttributes(employeeName),
+		attribute.String("staff.room_name", roomName),
+		attribute.String("staff.action", action),
+		attribute.String("staff.item_name", item),
+		attribute.Int("staff.item_quantity", quantity),
+	)
+	defer span.End()
+
+	err := h.actionConsumeItem(spanCtx, action, item, quantity, employeeName, roomName)
 	if err == nil {
 		return
 	}
 
 	var stockErr *dbErrors.StockInsufficientQuantityErr
 	if !errors.As(err, &stockErr) {
-		slog.ErrorContext(ctx, "failed to consume item", "employeeName", employeeName, "roomName", roomName, "error", err)
+		telemetry.RecordSpanError(span, err)
+		slog.ErrorContext(spanCtx, "failed to consume item", "employeeName", employeeName, "roomName", roomName, "error", err)
 		return
 	}
 
-	slog.WarnContext(ctx,
+	slog.WarnContext(spanCtx,
 		"stock item unavailable for housekeeper action, requesting restock",
 		"employeeName", employeeName,
 		"roomName", roomName,
@@ -151,32 +179,51 @@ func (h *housekeeper) actionConsumeItemRetry(ctx context.Context, action string,
 		"requestedQuantity", stockErr.Quantity,
 	)
 
-	if err := h.stoker.ImmediateRestock(ctx, item); err != nil {
-		slog.ErrorContext(ctx, "failed to restock item", "employeeName", employeeName, "roomName", roomName, "error", err)
+	if err := h.stoker.ImmediateRestock(spanCtx, item); err != nil {
+		telemetry.RecordSpanError(span, err)
+		slog.ErrorContext(spanCtx, "failed to restock item", "employeeName", employeeName, "roomName", roomName, "error", err)
 		return
 	}
 
-	if err := h.actionConsumeItem(ctx, action, item, quantity, employeeName, roomName); err != nil {
-		slog.ErrorContext(ctx, "failed to consume item after restock", "employeeName", employeeName, "roomName", roomName, "error", err)
+	if err := h.actionConsumeItem(spanCtx, action, item, quantity, employeeName, roomName); err != nil {
+		telemetry.RecordSpanError(span, err)
+		slog.ErrorContext(spanCtx, "failed to consume item after restock", "employeeName", employeeName, "roomName", roomName, "error", err)
 	}
 }
 
 func (h *housekeeper) actionConsumeItem(ctx context.Context, action string, item string, quantity int,
 	employeeName string, roomName string) error {
+	spanCtx, span := telemetry.StartSpan(ctx, "staff.housekeeper.consume_inventory",
+		telemetry.RequestAttributes(employeeName),
+		attribute.String("staff.room_name", roomName),
+		attribute.String("staff.action", action),
+		attribute.String("staff.item_name", item),
+		attribute.Int("staff.item_quantity", quantity),
+	)
+	defer span.End()
 
-	err := h.stockRepo.ConsumeItem(ctx, item, quantity)
+	err := h.stockRepo.ConsumeItem(spanCtx, item, quantity)
 	if err == nil {
-		slog.InfoContext(ctx, action, "employeeName", employeeName, "roomName", roomName)
+		slog.InfoContext(spanCtx, action, "employeeName", employeeName, "roomName", roomName)
 
 		return nil
 	}
 
+	telemetry.RecordSpanError(span, err)
 	return err
 }
 
 func (h *housekeeper) updateCleaningStatus(ctx context.Context, employeeName string, roomName string, cleaningStatus string) {
-	if err := h.cottageRepo.UpdateCleaningStatus(ctx, roomName, cleaningStatus); err != nil {
-		slog.ErrorContext(ctx,
+	spanCtx, span := telemetry.StartSpan(ctx, "staff.housekeeper.update_cleaning_status",
+		telemetry.RequestAttributes(employeeName),
+		attribute.String("staff.room_name", roomName),
+		attribute.String("staff.cleaning.status", cleaningStatus),
+	)
+	defer span.End()
+
+	if err := h.cottageRepo.UpdateCleaningStatus(spanCtx, roomName, cleaningStatus); err != nil {
+		telemetry.RecordSpanError(span, err)
+		slog.ErrorContext(spanCtx,
 			"failed to update cleaning status",
 			"employeeName", employeeName,
 			"roomName", roomName,
@@ -187,6 +234,14 @@ func (h *housekeeper) updateCleaningStatus(ctx context.Context, employeeName str
 }
 
 func (h *housekeeper) actionLaundry(ctx context.Context, action string, laundryItem string, employeeName string, roomName string) {
+	spanCtx, span := telemetry.StartSpan(ctx, "staff.housekeeper.request_laundry",
+		telemetry.RequestAttributes(employeeName),
+		attribute.String("staff.room_name", roomName),
+		attribute.String("staff.action", action),
+		attribute.String("staff.laundry.item", laundryItem),
+	)
+	defer span.End()
+
 	laundryRequest := domain.WashRequest{
 		RoomName: roomName,
 		Item:     laundryItem,
@@ -194,7 +249,7 @@ func (h *housekeeper) actionLaundry(ctx context.Context, action string, laundryI
 
 	h.laundererRequestChan <- laundryRequest
 
-	slog.InfoContext(ctx,
+	slog.InfoContext(spanCtx,
 		action,
 		"laundryItem", laundryItem,
 		"employeeName", employeeName,
