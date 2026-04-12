@@ -4,7 +4,7 @@ Simulates operational staff work triggered by cleaning requests and time-change 
 
 ## Main Docs
 
-See the main project documentation: <https://github.com/Kenji-Uema/kenshu-elarisProject-docs>
+See the main project documentation: <https://kenji-uema.github.io/kenshu-elarisProject-docs/>
 
 ## What It Does
 
