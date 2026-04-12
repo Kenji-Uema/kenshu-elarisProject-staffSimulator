@@ -1,6 +1,10 @@
-# staffSimulator
+# Staff Simulator
 
 Simulates operational staff work triggered by cleaning requests and time-change events.
+
+## Main Docs
+
+See the main project documentation: <https://github.com/Kenji-Uema/kenshu-elarisProject-docs>
 
 ## What It Does
 
@@ -8,14 +12,169 @@ Simulates operational staff work triggered by cleaning requests and time-change 
 - simulates housekeepers, launderers, and stockers
 - updates cottage cleaning state and shared stock in MongoDB
 - reacts to day-change and hour-change events
-- exposes `/healthz` and `/readyz` probes
 
 ## Interfaces
 
 - RabbitMQ consumers for cleaning, day-change, and hour-change events
 - MongoDB repositories for cottage and stock state
 - gRPC client to `clockSimulator`
-- HTTP probes
+
+## RabbitMQ Specification
+
+This service is a RabbitMQ consumer only.
+
+- Produces to RabbitMQ: none in the runtime application
+- Consumes from RabbitMQ: `q.staff.cleaning`, `q.staff.day-change`, `q.staff.hour-change` by default
+- Wire format: Protobuf messages with `content_type=application/protobuf`
+- Delivery mode used by the shared producer implementation: persistent
+- Ack strategy: manual ack on valid messages, `Nack(requeue=false)` on invalid payloads
+
+The actual queue and binding names are configurable through environment variables.
+
+### Topology Overview
+
+| Queue | Exchange | Routing key | Consumed by | Effect |
+| --- | --- | --- | --- | --- |
+| `q.staff.cleaning` | `ex.cleaning.request` | `cleaning.request` | `ManagerService` | Dispatches a cleaning job to the internal cleaning worker channel |
+| `q.staff.day-change` | `ex.time.event` | `time.event.day` | `TimeEventNotificationService` | Notifies day-change subscribers and triggers restock selection through `ManagerService` |
+| `q.staff.hour-change` | `ex.time.event` | `time.event.hour` | `TimeEventNotificationService` | Notifies hour-change subscribers |
+
+### 1. Cleaning Requests
+
+- Queue env: `CLEANING_QUEUE_*`
+- Default queue: `q.staff.cleaning`
+- Binding env: `CLEANING_BINDING_*`
+- Default exchange: `ex.cleaning.request`
+- Typical routing key: `cleaning.request`
+- Consumer: `ManagerService.Start`
+- Internal handoff: writes to `channels.cleaning`
+
+Payload type: `staff.CleaningRequest`
+
+```proto
+message CleaningRequest {
+  string roomName = 1;
+  RequestType request = 2;
+}
+
+enum RequestType {
+  UNSPECIFIED = 0;
+  PREPARE_FOR_GUEST = 1;
+  DAILY_CLEANING = 2;
+  FULL_CLEANING = 3;
+  PREPARE_FOR_SLEEP = 4;
+}
+```
+
+Human-readable example:
+
+```json
+{
+  "roomName": "A",
+  "request": "PREPARE_FOR_GUEST"
+}
+```
+
+Accepted request values:
+
+- `PREPARE_FOR_GUEST`
+- `DAILY_CLEANING`
+- `FULL_CLEANING`
+- `PREPARE_FOR_SLEEP`
+
+Validation and delivery behavior:
+
+- `roomName` must not be blank
+- `request` must not be `UNSPECIFIED`
+- invalid payloads are nacked without requeue
+- valid payloads are acked after dispatch to the internal cleaning channel
+
+### 2. Day-Change Events
+
+- Queue env: `DAY_CHANGE_QUEUE_*`
+- Default queue: `q.staff.day-change`
+- Binding env: `DAY_CHANGE_BINDING_*`
+- Default exchange: `ex.time.event`
+- Default routing key: `time.event.day`
+- Consumer: `TimeEventNotificationService.Start`
+- Internal handoff: publishes a `time.Time` event to registered day-change subscribers
+
+Payload type: `event.TimeEvent`
+
+```proto
+message TimeEvent {
+  google.protobuf.Timestamp time = 1;
+}
+```
+
+Human-readable example:
+
+```json
+{
+  "time": "2026-04-12T00:00:00Z"
+}
+```
+
+Behavior:
+
+- message must contain a non-zero `time`
+- invalid payloads are nacked without requeue
+- valid payloads are acked, then forwarded to day-change subscribers
+- `ManagerService` subscribes to day-change notifications and creates an internal restock request when one arrives
+
+### 3. Hour-Change Events
+
+- Queue env: `HOUR_CHANGE_QUEUE_*`
+- Default queue: `q.staff.hour-change`
+- Binding env: `HOUR_CHANGE_BINDING_*`
+- Default exchange: `ex.time.event`
+- Default routing key: `time.event.hour`
+- Consumer: `TimeEventNotificationService.Start`
+- Internal handoff: publishes a `time.Time` event to registered hour-change subscribers
+
+Payload type: `event.TimeEvent`
+
+Human-readable example:
+
+```json
+{
+  "time": "2026-04-12T14:00:00Z"
+}
+```
+
+Behavior:
+
+- message must contain a non-zero `time`
+- invalid payloads are nacked without requeue
+- valid payloads are acked, then forwarded to hour-change subscribers
+
+### What This Service Produces
+
+It does not publish any RabbitMQ messages in the runtime application.
+
+What it does produce after consuming RabbitMQ messages:
+
+- internal cleaning jobs on `channels.cleaning`
+- internal day-change notifications to registered subscribers
+- internal hour-change notifications to registered subscribers
+- internal restock jobs on `channels.stocker` after a day-change event
+
+The RabbitMQ producer in `internal/infra/mq/rabbitmq_producer.go` exists as shared infrastructure and is used by tests, but it is not wired into the application startup path.
+
+### Publisher Notes For Upstream Services
+
+If another service publishes into these queues through their bound exchanges:
+
+- declare the exchange as `direct`
+- publish Protobuf-encoded messages
+- set `content_type` to `application/protobuf`
+- use the expected routing key for the target queue binding
+
+| Purpose | Exchange | Routing key | Payload |
+| --- | --- | --- | --- |
+| Request room cleaning | `ex.cleaning.request` | `cleaning.request` | `staff.CleaningRequest` |
+| Signal day change | `ex.time.event` | `time.event.day` | `event.TimeEvent` |
+| Signal hour change | `ex.time.event` | `time.event.hour` | `event.TimeEvent` |
 
 ## Local Commands
 
