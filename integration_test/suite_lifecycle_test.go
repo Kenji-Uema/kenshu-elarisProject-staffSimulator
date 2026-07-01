@@ -46,16 +46,24 @@ var _ = BeforeSuite(func() {
 	suiteDayEx = "ex.day_change.event"
 	suiteHourEx = "ex.hour_change.event"
 
+	cottagesFixturePath, err := helpers.FixturePath("cottages.json")
+	if err != nil {
+		Fail(fmt.Sprintf("resolve cottages fixture path: %v", err))
+	}
+	stocksFixturePath, err := helpers.FixturePath("stocks.json")
+	if err != nil {
+		Fail(fmt.Sprintf("resolve stocks fixture path: %v", err))
+	}
+
 	helpers.SeedMongoFromFixtures(
 		t,
 		suiteMongoHost,
 		suiteDBName,
-		"/home/kenjiuema/Documents/projects/staffSimulator/test_data/cottages.json",
-		"/home/kenjiuema/Documents/projects/staffSimulator/test_data/stocks.json",
+		cottagesFixturePath,
+		stocksFixturePath,
 	)
 	suiteClockHost, suiteClockPort = helpers.StartClockEmulator(t)
 
-	var err error
 	suiteRawMongoClient, err = mongo.Connect(options.Client().ApplyURI(fmt.Sprintf("mongodb://test_user:test_pass@%s", suiteMongoHost)))
 	if err != nil {
 		Fail(fmt.Sprintf("connect mongo: %v", err))

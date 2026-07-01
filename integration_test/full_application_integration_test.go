@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/Kenji-Uema/staffSimulator/integration_test/helpers"
 	"github.com/Kenji-Uema/staffSimulator/internal/config"
 	"github.com/Kenji-Uema/staffSimulator/internal/domain/documents"
 	"github.com/Kenji-Uema/staffSimulator/internal/domain/dto"
@@ -16,11 +17,6 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-)
-
-const (
-	cottagesFixturePath = "/home/kenjiuema/Documents/projects/staffSimulator/test_data/cottages.json"
-	stocksFixturePath   = "/home/kenjiuema/Documents/projects/staffSimulator/test_data/stocks.json"
 )
 
 type scenarioExpectation struct {
@@ -238,6 +234,15 @@ func resetFixtureState(t FullGinkgoTInterface) {
 	Expect(err).NotTo(HaveOccurred())
 	_, err = suiteStockCollection.DeleteMany(ctx, bson.M{})
 	Expect(err).NotTo(HaveOccurred())
+
+	cottagesFixturePath, err := helpers.FixturePath("cottages.json")
+	if err != nil {
+		t.Fatalf("resolve cottages fixture path: %v", err)
+	}
+	stocksFixturePath, err := helpers.FixturePath("stocks.json")
+	if err != nil {
+		t.Fatalf("resolve stocks fixture path: %v", err)
+	}
 
 	cottages := loadFixture[documents.Cottage](t, cottagesFixturePath)
 	stocks := loadFixture[documents.Stock](t, stocksFixturePath)

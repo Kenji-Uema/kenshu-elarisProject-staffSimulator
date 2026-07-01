@@ -36,9 +36,14 @@ func ApplicationStart(t TestReporter, cfg ApplicationConfig) (stop func(), runEr
 	}
 	binPath := filepath.Join(binDir, "staff-simulator")
 	goBin := goBinaryPath()
+	projectRoot, err := ProjectRoot()
+	if err != nil {
+		_ = os.RemoveAll(binDir)
+		t.Fatalf("resolve project root: %v", err)
+	}
 
 	buildCmd := exec.Command(goBin, "build", "-o", binPath, "./internal")
-	buildCmd.Dir = "/home/kenjiuema/Documents/projects/staffSimulator"
+	buildCmd.Dir = projectRoot
 	buildCmd.Env = os.Environ()
 	buildCmd.Stdout = io.MultiWriter(&output, newPrefixedWriter(os.Stdout, "[build] "))
 	buildCmd.Stderr = io.MultiWriter(&output, newPrefixedWriter(os.Stderr, "[build] "))
@@ -50,7 +55,7 @@ func ApplicationStart(t TestReporter, cfg ApplicationConfig) (stop func(), runEr
 	output.Reset()
 
 	cmd := exec.CommandContext(runCtx, binPath)
-	cmd.Dir = "/home/kenjiuema/Documents/projects/staffSimulator"
+	cmd.Dir = projectRoot
 	cmd.Env = envWithOverrides(os.Environ(), applicationEnv(cfg))
 	cmd.Stdout = io.MultiWriter(&output, newPrefixedWriter(os.Stdout, "[app] "))
 	cmd.Stderr = io.MultiWriter(&output, newPrefixedWriter(os.Stderr, "[app] "))
