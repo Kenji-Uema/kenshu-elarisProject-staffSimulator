@@ -4,7 +4,7 @@ build: generate
 	go build .
 
 generate:
-	npx buf generate
+	buf generate
 
 docker-build:
 	 docker buildx build --build-arg SERVICE_NAME=staff-simulator --build-arg VERSION=$(IMAGE_TAG) -t staff-simulator:$(IMAGE_TAG) --load .
