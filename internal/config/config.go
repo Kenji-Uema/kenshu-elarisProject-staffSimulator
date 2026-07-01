@@ -22,8 +22,9 @@ type Configs struct {
 
 type AppConfig struct {
 	Name struct {
-		ServiceName string `env:"SERVICE_NAME"`
-		Version     string `env:"VERSION"`
+		ServiceName      string `env:"SERVICE_NAME" envDefault:"staffSimulator"`
+		Version          string `env:"VERSION" envDefault:"latest"`
+		ServiceNamespace string `env:"SERVICE_NAMESPACE" envDefault:"unknown"`
 	}
 	Server struct {
 		Host                       string `env:"SERVICE_HOST,required"`

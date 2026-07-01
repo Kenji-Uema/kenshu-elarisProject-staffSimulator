@@ -50,5 +50,9 @@ func NewLogger(appConfig config.AppConfig) *slog.Logger {
 	}
 	return slog.New(traceHandler).With(
 		"app", hostname,
+		"service.name", appConfig.Name.ServiceName,
+		"service.version", appConfig.Name.Version,
+		"service.namespace", appConfig.Name.ServiceNamespace,
+		"service.instance.id", hostname,
 	)
 }
